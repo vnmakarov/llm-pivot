@@ -17,7 +17,7 @@
   --grey:        #c7c7cc;
   --radius:      12px;
   --topbar-h:    52px;
-  --monitor-h:   340px;   /* fixed height of the monitor pane; drag to change */
+  --monitor-h:   340px;   /* height of the monitor pane; set by fitMonitor() */
   --sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display",
           "Helvetica Neue", Helvetica, "Segoe UI", Arial, sans-serif;
   --mono: "SF Mono", ui-monospace, SFMono-Regular, Menlo, Monaco,
@@ -246,6 +246,8 @@ input[type=text], input[type=number], textarea, select {
   color: var(--ink);
 }
 textarea { font-family: var(--mono); font-size: 12.5px; line-height: 1.5; resize: vertical; }
+/* Grown to its content by autosize() in app.js, so it never scrolls itself. */
+textarea.autosize { overflow-y: hidden; resize: none; }
 input:focus, textarea:focus, select:focus {
   outline: none; border-color: var(--accent);
   box-shadow: 0 0 0 3px rgba(0,113,227,.15);
@@ -318,7 +320,7 @@ input[readonly] { background: var(--panel-2); color: var(--ink-2); }
 }
 .tab.active { background: var(--panel-2); border-color: var(--line-soft); color: var(--ink); }
 
-/* Fixed height, always fully on screen; only its log scrolls. */
+/* Takes all the height the form above does not need; only its log scrolls. */
 .monitor-card {
   display: flex;
   flex-direction: column;

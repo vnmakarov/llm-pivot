@@ -76,7 +76,7 @@ Check a configuration without starting anything:
 ## Running under systemd (`--user`)
 
 ```sh
-cp ~/GITHUB/llm-pivot/llm-pivot.service ~/.config/systemd/user/
+cp `pwd`/llm-pivot.service ~/.config/systemd/user/
 systemctl --user daemon-reload
 systemctl --user enable --now llm-pivot
 ```
@@ -157,15 +157,20 @@ The right pane always has two parts:
 2. **Engine monitor** — the live monitoring output of the engine that is
    running right now, whatever is selected above.
 
-The page itself never scrolls: the monitor pane has a **fixed height and is
-always fully visible** at the bottom of the window, and the output **slides
-inside it**, following the newest line while **Follow** is ticked. Untick
-**Follow** to scroll back through the buffer without being yanked forward.
+The page itself never scrolls: the monitor pane is **always fully visible**
+at the bottom of the window, and the output **slides inside it**, following
+the newest line while **Follow** is ticked. Untick **Follow** to scroll back
+through the buffer without being yanked forward.
 
-Drag the **grey handle** between the two parts to resize the monitor pane
-(or focus it with Tab and use ↑/↓, Shift for bigger steps). The height is
-remembered in the browser and is clamped so that neither part can be
-squeezed away, including when the window is made shorter.
+The monitor takes **every pixel the form above does not need**, so it is as
+tall as the selected engine or model allows and grows again when you select
+a shorter page. A form taller than the window keeps the monitor at its
+minimum and scrolls instead.
+
+Drag the **grey handle** between the two parts to overrule that (or focus it
+with Tab and use ↑/↓, Shift for bigger steps). A dragged height holds while
+you stay on that page; selecting another engine or model fits the monitor to
+the new form again.
 
 ### Adding an engine
 
@@ -175,7 +180,7 @@ Click **+** next to ENGINES and fill in:
 |---|---|
 | **Name** | Shown in the left pane; must be unique. |
 | **Port** | The port the engine listens on. llm-pivot proxies to `127.0.0.1:<port>`. Must differ from the monitor and router ports. |
-| **Command** | Program and its default options, e.g. `/path/llama-server -ctx 64000`. Quoting is shell-like, but **no shell is involved**: no globbing, no `$VAR`, no pipes. |
+| **Command** | Program and its default options, e.g. `/path/llama-server -ctx 64000`. The box grows to show the whole command. Quoting is shell-like, but **no shell is involved**: no globbing, no `$VAR`, no pipes. |
 | **Monitoring info from** | How the right pane gets its content — see [Monitoring modes](#monitoring-modes). |
 | **Monitor URL** | For the `http` and `embed` modes, e.g. `http://127.0.0.1:{{port}}/metrics`. |
 | **Poll interval** | How often that URL is sampled (seconds). `http` mode only. |
@@ -192,7 +197,7 @@ Click **Add model** under an engine:
 | Field | Meaning |
 |---|---|
 | **Model name** | What OpenAI clients put in `"model"`. **Must be unique across every engine** — the page and the loader both refuse duplicates. |
-| **Additional engine options** | Extra flags for this model. A flag repeated here **replaces** the engine's value for it. |
+| **Additional engine options** | Extra flags for this model. The box grows to show them all. A flag repeated here **replaces** the engine's value for it. |
 
 The **Effective command line** box shows exactly what will be executed after
 the merge, including the injected port.

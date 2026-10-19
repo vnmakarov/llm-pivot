@@ -11,6 +11,7 @@ const S = {
   monitorTab: 'http',
   pollTimer: null,
   banner: null,
+  monitorDragged: false,
 };
 
 const $ = (id) => document.getElementById(id);
@@ -166,6 +167,7 @@ function select(sel, keepHash) {
   S.banner = null;
   S.treeSig = '';
   S.detailSig = '';
+  S.monitorDragged = false;
   if (!keepHash) {
     const h = selToHash(sel);
     if (location.hash !== h) history.replaceState(null, '', h);
@@ -209,7 +211,7 @@ function detailSig() {
 function renderDetail(force) {
   if (!S.cfg) return;
   const sig = detailSig();
-  if (!force && sig === S.detailSig) { refreshModelControls(); return; }
+  if (!force && sig === S.detailSig) { refreshModelControls(); fitMonitor(); return; }
   S.detailSig = sig;
 
   const s = S.sel;
@@ -221,6 +223,27 @@ function renderDetail(force) {
     case 'new-model': renderModelForm(s.engine, null); break;
     default: $('detail').innerHTML = '';
   }
+  initAutosize();
+  fitMonitor();
+}
+
+// autosize gives a textarea exactly the height its text needs, so a command
+// or an option list is never hidden behind an inner scrollbar.
+function autosize(ta) {
+  ta.style.height = 'auto';
+  const borders = ta.offsetHeight - ta.clientHeight;
+  ta.style.height = (ta.scrollHeight + borders) + 'px';
+}
+
+function autosizeAll() {
+  for (const ta of $('detail').querySelectorAll('textarea.autosize')) autosize(ta);
+}
+
+function initAutosize() {
+  for (const ta of $('detail').querySelectorAll('textarea.autosize')) {
+    ta.addEventListener('input', () => { autosize(ta); fitMonitor(); });
+  }
+  autosizeAll();
 }
 
 function findEngine(name) {
@@ -349,7 +372,7 @@ function renderEngineForm(e, isNew) {
     </div>
     <div class="field">
       <label>Command <span class="hint">— program and default options</span></label>
-      <textarea id="e-command" rows="7" spellcheck="false"
+      <textarea id="e-command" class="autosize" rows="2" spellcheck="false"
         placeholder="/path/to/llama-server --ctx-size 64000">${esc(d.command)}</textarea>
     </div>
     <div class="grid2">
@@ -489,7 +512,7 @@ function renderModelForm(engineName, m) {
     </div>
     <div class="field">
       <label>Additional engine options <span class="hint">— override the engine's own flags</span></label>
-      <textarea id="m-options" rows="5" spellcheck="false"
+      <textarea id="m-options" class="autosize" rows="2" spellcheck="false"
         placeholder="-m /models/qwen3-30b.gguf --ctx-size 32768">${esc(d.options)}</textarea>
     </div>
     ${isNew ? '' : `
@@ -612,6 +635,7 @@ async function loadEffectiveCommand(name) {
   } catch (e) {
     if ($('m-command')) $('m-command').textContent = '(' + e.message + ')';
   }
+  fitMonitor();
 }
 
 /* ---------------------------------------------------------------- monitor */
@@ -702,7 +726,6 @@ function renderEmbed(st) {
 /* ------------------------------------------------- monitor pane resizing */
 
 const MONITOR_MIN = 170;
-const MONITOR_KEY = 'llm-pivot.monitorHeight';
 
 function monitorMax() {
   const content = $('content');
@@ -710,26 +733,37 @@ function monitorMax() {
   return Math.max(MONITOR_MIN, avail - 150); // always leave room for the form
 }
 
-function setMonitorHeight(px, remember) {
+function setMonitorHeight(px) {
   const h = Math.round(Math.min(Math.max(px, MONITOR_MIN), monitorMax()));
   document.documentElement.style.setProperty('--monitor-h', h + 'px');
-  if (remember) {
-    try { localStorage.setItem(MONITOR_KEY, String(h)); } catch (e) { /* private mode */ }
-  }
   // Keep the newest output in view while the pane grows or shrinks.
   const pre = $('logview');
   if (pre && $('follow').checked) pre.scrollTop = pre.scrollHeight;
-  return h;
+}
+
+// fitMonitor gives the monitor every pixel the form above does not need, so
+// it is as tall as the selected engine or model page permits. A drag opts
+// out of this until another page is selected.
+function fitMonitor() {
+  if (S.monitorDragged) return;
+  const content = $('content');
+  const form = $('detail').firstElementChild;
+  if (!content) return;
+  const avail = content.clientHeight - $('monitor-resizer').offsetHeight;
+  // Twice: the first pass may retract the form's scrollbar, which widens the
+  // text and makes the form shorter again. 2px of slack, because a form one
+  // pixel too tall brings that scrollbar straight back.
+  for (let i = 0; i < 2; i++) {
+    setMonitorHeight(avail - (form ? form.offsetHeight : 0) - 2);
+  }
 }
 
 function initResizer() {
   const bar = $('monitor-resizer');
   const card = $('monitor-card');
-
-  let saved = parseInt(localStorage.getItem(MONITOR_KEY) || '', 10);
-  if (!isNaN(saved)) setMonitorHeight(saved, false);
-
   let dragging = false, startY = 0, startH = 0;
+
+  const drag = (px) => { S.monitorDragged = true; setMonitorHeight(px); };
 
   bar.addEventListener('pointerdown', (e) => {
     dragging = true;
@@ -741,14 +775,13 @@ function initResizer() {
     e.preventDefault();
   });
   bar.addEventListener('pointermove', (e) => {
-    if (dragging) setMonitorHeight(startH - (e.clientY - startY), false);
+    if (dragging) drag(startH - (e.clientY - startY));
   });
   const stop = () => {
     if (!dragging) return;
     dragging = false;
     bar.classList.remove('dragging');
     document.body.style.userSelect = '';
-    setMonitorHeight(card.getBoundingClientRect().height, true);
   };
   bar.addEventListener('pointerup', stop);
   bar.addEventListener('pointercancel', stop);
@@ -757,15 +790,17 @@ function initResizer() {
   bar.addEventListener('keydown', (e) => {
     const step = e.shiftKey ? 60 : 20;
     const h = card.getBoundingClientRect().height;
-    if (e.key === 'ArrowUp') setMonitorHeight(h + step, true);
-    else if (e.key === 'ArrowDown') setMonitorHeight(h - step, true);
+    if (e.key === 'ArrowUp') drag(h + step);
+    else if (e.key === 'ArrowDown') drag(h - step);
     else return;
     e.preventDefault();
   });
 
-  // Clamp again when the window gets shorter.
+  // A narrower window rewraps the textareas, so measure them again.
   window.addEventListener('resize', () => {
-    setMonitorHeight(card.getBoundingClientRect().height, false);
+    autosizeAll();
+    if (S.monitorDragged) setMonitorHeight(card.getBoundingClientRect().height);
+    else fitMonitor();
   });
 }
 
