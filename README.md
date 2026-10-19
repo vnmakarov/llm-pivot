@@ -121,7 +121,7 @@ behind.**
 │     ○ gemma3-27b   │  Options          [ -m /models/qwen3-30b.gguf    ]  │
 │     + Add model    │  Effective command line                             │
 │ ▸ strata    :8090  │  /path/llama-server … -m /models/… --port 8080      │
-│     ○ phi4-mini    │  [Save model] [Restart] [Stop]        [Delete]      │
+│     ○ phi4-mini    │  [Save model] [Restart] [Stop] [Copy]  [Delete]     │
 │     + Add model    │ ─────────────────────────────────────────────────── │
 │                    │  Engine monitor · llama.cpp · qwen3-30b             │
 │ ~/.config/…yaml    │  ┌───────────────────────────────────────────────┐  │
@@ -240,6 +240,9 @@ On a model page:
   first, then starts this one and waits for it to answer.
 - **Restart** — kills and starts the same model.
 - **Stop** — kills the running engine; nothing is serving afterwards.
+- **Copy** — adds `<model name>-copy` to the same engine with the saved
+  options copied verbatim, and opens it. Nothing is started or stopped.
+  Copying twice is refused: the second `-copy` would duplicate the first.
 
 Editing a running engine or its model **stops it**, with a note explaining
 why; start it again when you are done editing.

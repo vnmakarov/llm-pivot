@@ -568,6 +568,7 @@ function refreshModelControls() {
     } else {
       h += `<button class="btn green" id="m-start"${busy ? ' disabled' : ''}>Start</button>`;
     }
+    h += `<button class="btn" id="m-copy">Copy</button>`;
     h += `<div class="spacer"></div><button class="btn danger" id="m-delete">Delete model</button>`;
   }
   box.innerHTML = h;
@@ -589,6 +590,21 @@ function refreshModelControls() {
     bind('m-start', 'start');
     bind('m-restart', 'restart');
     bind('m-stop', 'stop');
+    $('m-copy').onclick = async () => {
+      const src = findModel(s.engine, name);
+      if (!src) return;
+      const copy = name + '-copy';
+      try {
+        const res = await api('POST', '/api/models',
+          { engine: s.engine, original: '', name: copy, options: src.options || '' });
+        (res.notes || []).forEach((x) => toast(x));
+        toast(`Copied to ${copy}`, 'ok');
+        await poll();
+        select({ kind: 'model', engine: s.engine, model: copy });
+      } catch (e) {
+        toast(e.message, 'error');
+      }
+    };
     $('m-delete').onclick = async () => {
       if (!confirm(`Delete model "${name}"?`)) return;
       try {
