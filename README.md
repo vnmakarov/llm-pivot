@@ -17,8 +17,29 @@ running before.
 
 ---
 
+## Why
+
+I work with many different local models, and they do not all run on the same
+engine: some want llama.cpp, some want strata or ninfer, some want a
+particular llama.cpp clone such as prism-llama. Only one of them can hold the
+VRAM at a time, so every switch meant stopping the engine that had it and
+starting the next one by hand, with the right flags. Watching them was no
+better — each engine reports where it likes, so its logs or its HTTP status
+page were never in the same place twice.
+
+llm-pivot is the minimal router that solves both problems for me. One
+OpenAI-compatible port starts whichever engine serves the model a request
+names, freeing the VRAM first, and one page shows the output or status page of
+whatever is running. I hope it is useful to other people with the same
+problems.
+
+llm-pivot is mostly written by Claude Opus 5.
+
+---
+
 ## Contents
 
+- [Why](#why)
 - [Install](#install)
 - [Running under systemd](#running-under-systemd---user)
 - [The monitor page](#the-monitor-page)
