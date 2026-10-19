@@ -54,6 +54,16 @@ First start writes a default configuration if none exists:
 
 Open <http://127.0.0.1:8061>.
 
+**Example configuration:** See `config.example.yaml` in this repo for a template showing
+how to configure llama.cpp, strata, and other engines with real model paths:
+
+```yaml
+command: llama-server ...           # path to llama-serve binary
+work_dir: ~/Strata                  # working directory for strata
+models:
+  - options: -m ~/models/model.gguf # model file path
+```
+
 Check a configuration without starting anything:
 
 ```sh
@@ -428,6 +438,27 @@ Usable in `command`, `options`, `monitor_url`, `work_dir` and `env`:
 | `{{engine}}` | the engine name |
 | `{{model}}` / `{{name}}` | the model name |
 | `{{home}}` | `$HOME` |
+
+### Common paths
+
+**llama-serve** (llama.cpp):
+```yaml
+command: /path/to/llama.cpp/build/bin/llama-server
+```
+Update `/path/to` to wherever you cloned and built `llama.cpp`.
+
+**strata**:
+```yaml
+work_dir: ~/Strata                         # strata's working directory
+command: ~/Strata/.venv/bin/python ~/Strata/serve/server.py
+```
+
+**Models**:
+```yaml
+options: -m ~/models/Qwen3-30B-Q4_K_M.gguf  # llama.cpp format
+options: --config ~/models/swift-iq2_xs.json # strata format
+```
+Store models in `~/models/` or any path you have space; adjust the `-m` or config path accordingly.
 
 ### Startup validation
 
