@@ -1,4 +1,4 @@
-# engine-router
+# llm-pivot
 
 A small Go server that **starts, stops and monitors local LLM engines**
 (llama.cpp, strata, ninfer, …) and **routes OpenAI-compatible traffic** to
@@ -36,8 +36,8 @@ running before.
 Requires Go 1.22 or newer (developed against 1.26).
 
 ```sh
-cd ~/GITHUB/engine-router
-go build -o engine-router .
+cd ~/GITHUB/llm-pivot
+go build -o llm-pivot .
 ```
 
 The web page is compiled into the binary, so the single executable is all you
@@ -46,10 +46,10 @@ need to deploy.
 First start writes a default configuration if none exists:
 
 ```sh
-./engine-router
-# engine-router: created default configuration /home/you/.config/engine-router/config.yaml
-# engine-router: monitor: listening on http://127.0.0.1:8061
-# engine-router: router:  listening on http://127.0.0.1:8078
+./llm-pivot
+# llm-pivot: created default configuration /home/you/.config/llm-pivot/config.yaml
+# llm-pivot: monitor: listening on http://127.0.0.1:8061
+# llm-pivot: router:  listening on http://127.0.0.1:8078
 ```
 
 Open <http://127.0.0.1:8061>.
@@ -57,8 +57,8 @@ Open <http://127.0.0.1:8061>.
 Check a configuration without starting anything:
 
 ```sh
-./engine-router -check
-./engine-router -check -config /path/to/other.yaml
+./llm-pivot -check
+./llm-pivot -check -config /path/to/other.yaml
 ```
 
 ---
@@ -66,19 +66,19 @@ Check a configuration without starting anything:
 ## Running under systemd (`--user`)
 
 ```sh
-cp ~/GITHUB/engine-router/engine-router.service ~/.config/systemd/user/
+cp ~/GITHUB/llm-pivot/llm-pivot.service ~/.config/systemd/user/
 systemctl --user daemon-reload
-systemctl --user enable --now engine-router
+systemctl --user enable --now llm-pivot
 ```
 
 Everyday commands:
 
 ```sh
-systemctl --user status  engine-router
-systemctl --user restart engine-router
-systemctl --user reload  engine-router     # re-read the YAML file (SIGHUP)
-systemctl --user stop    engine-router
-journalctl --user -u engine-router -f
+systemctl --user status  llm-pivot
+systemctl --user restart llm-pivot
+systemctl --user reload  llm-pivot     # re-read the YAML file (SIGHUP)
+systemctl --user stop    llm-pivot
+journalctl --user -u llm-pivot -f
 ```
 
 To keep the service running when you are not logged in:
@@ -88,10 +88,10 @@ loginctl enable-linger $USER
 ```
 
 The shipped unit assumes the binary lives at
-`~/GITHUB/engine-router/engine-router` and the configuration at
-`~/.config/engine-router/config.yaml`; edit `ExecStart` if yours differ.
+`~/GITHUB/llm-pivot/llm-pivot` and the configuration at
+`~/.config/llm-pivot/config.yaml`; edit `ExecStart` if yours differ.
 
-On stop, engine-router sends `SIGTERM` to the engine's whole process group,
+On stop, llm-pivot sends `SIGTERM` to the engine's whole process group,
 waits `stop_timeout_seconds`, then `SIGKILL`s it. **No engine is ever left
 behind.**
 
@@ -101,7 +101,7 @@ behind.**
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────┐
-│ ⚙ engine-router   ● llama.cpp · qwen3-30b — running 4m    router :8078   │
+│ ⚙ llm-pivot   ● llama.cpp · qwen3-30b — running 4m    router :8078   │
 ├────────────────────┬─────────────────────────────────────────────────────┤
 │ ⚙ Settings         │  Model · qwen3-30b                                  │
 │                    │  ┌───────────────────────────────────────────────┐  │
@@ -164,7 +164,7 @@ Click **+** next to ENGINES and fill in:
 | Field | Meaning |
 |---|---|
 | **Name** | Shown in the left pane; must be unique. |
-| **Port** | The port the engine listens on. engine-router proxies to `127.0.0.1:<port>`. Must differ from the monitor and router ports. |
+| **Port** | The port the engine listens on. llm-pivot proxies to `127.0.0.1:<port>`. Must differ from the monitor and router ports. |
 | **Command** | Program and its default options, e.g. `/path/llama-server -ctx 64000`. Quoting is shell-like, but **no shell is involved**: no globbing, no `$VAR`, no pipes. |
 | **Monitoring info from** | How the right pane gets its content — see [Monitoring modes](#monitoring-modes). |
 | **Monitor URL** | For the `http` and `embed` modes, e.g. `http://127.0.0.1:{{port}}/metrics`. |
@@ -211,7 +211,7 @@ browser, which is what `embed` gives it:
 ```
 
 The frame is pointed at the URL once and left alone; the page refreshes
-itself. engine-router's own once-a-second poll does **not** reload it.
+itself. llm-pivot's own once-a-second poll does **not** reload it.
 
 An engine that sends `X-Frame-Options: DENY` or a CSP `frame-ancestors`
 cannot be framed — the pane will be blank. Use `http` mode against one of its
@@ -262,7 +262,7 @@ What happens:
 1. The `"model"` field is read from the request.
 2. If that model is **already running**, the request is forwarded as is.
 3. If a **different** model is running, its engine is **killed**, the right
-   engine is started with the right options, engine-router waits for it to
+   engine is started with the right options, llm-pivot waits for it to
    become healthy, and only then forwards the request.
 4. If the model is **not configured**, the request fails with `404` and an
    OpenAI-shaped error — the running engine is left alone.
@@ -270,33 +270,33 @@ What happens:
 Everything else is proxied verbatim to the running engine, including
 streaming responses (`"stream": true` is flushed through immediately).
 
-Two endpoints are answered by engine-router itself:
+Two endpoints are answered by llm-pivot itself:
 
 | Endpoint | Answer |
 |---|---|
 | `GET /v1/models` | Every configured model from every engine, each with `owned_by` (the engine) and `running`. Clients can therefore discover models that are not loaded yet. |
 | `GET /router/status` | The same runtime status the monitor page shows. |
 
-### Who answered? (`X-Engine-Router*`)
+### Who answered? (`X-Llm-Pivot*`)
 
 Every reply on the router port carries headers saying where it came from, so
 an error is never ambiguous:
 
 | Header | On | Meaning |
 |---|---|---|
-| `X-Engine-Router` | every reply | the version; you really are talking to engine-router |
-| `X-Engine-Router-Upstream` | **proxied replies only** | `<engine>/<model>:<port>` — the engine produced this |
+| `X-Llm-Pivot` | every reply | the version; you really are talking to llm-pivot |
+| `X-Llm-Pivot-Upstream` | **proxied replies only** | `<engine>/<model>:<port>` — the engine produced this |
 
-**If `X-Engine-Router-Upstream` is present, the engine answered; if it is
-absent, engine-router answered.** A 404 with the header is your client asking
+**If `X-Llm-Pivot-Upstream` is present, the engine answered; if it is
+absent, llm-pivot answered.** A 404 with the header is your client asking
 the engine for a path it does not serve; a 404 without it is a model
-engine-router does not know.
+llm-pivot does not know.
 
 ```sh
 $ curl -sD- -o/dev/null localhost:8078/chat/completions -d '{"model":"my-model"}'
 HTTP/1.1 404 Not Found
-X-Engine-Router: 1.0.0
-X-Engine-Router-Upstream: strata/my-model:8024     ← the engine said no
+X-Llm-Pivot: 1.0.0
+X-Llm-Pivot-Upstream: strata/my-model:8024     ← the engine said no
 ```
 
 Error statuses coming back from the engine are also written to the
@@ -304,17 +304,17 @@ monitoring pane, so the page shows what a client is doing wrong:
 
 ```
 engine "strata" answered 404 to POST /chat/completions (the engine rejected
-it, not engine-router); "strata" has no "/chat/completions" — most OpenAI
+it, not llm-pivot); "strata" has no "/chat/completions" — most OpenAI
 engines only serve /v1/…, so check that your client's base URL ends in /v1
 ```
 
 Repeats of the same status/method/path are suppressed for 10 seconds, so a
 client in a retry loop cannot flood the buffer.
 
-Error payloads **generated by engine-router** follow the OpenAI shape:
+Error payloads **generated by llm-pivot** follow the OpenAI shape:
 
 ```json
-{"error":{"message":"model \"ghost\" is not configured in engine-router; …",
+{"error":{"message":"model \"ghost\" is not configured in llm-pivot; …",
           "type":"model_not_found","param":null,"code":"model_not_found"}}
 ```
 
@@ -333,9 +333,9 @@ Error payloads **generated by engine-router** follow the OpenAI shape:
 Default location, in order of precedence:
 
 1. `-config <path>`
-2. `$ENGINE_ROUTER_CONFIG`
-3. `$XDG_CONFIG_HOME/engine-router/config.yaml`
-4. `~/.config/engine-router/config.yaml`
+2. `$LLM_PIVOT_CONFIG`
+3. `$XDG_CONFIG_HOME/llm-pivot/config.yaml`
+4. `~/.config/llm-pivot/config.yaml`
 
 The page writes this file back on every change. **Hand-written comments are
 not preserved** once you save from the page.
@@ -484,7 +484,7 @@ starts.
 
 ```
 -config string         path of the YAML configuration file
-                       (default ~/.config/engine-router/config.yaml)
+                       (default ~/.config/llm-pivot/config.yaml)
 -monitor-port int      override monitor_port from the configuration
 -router-port int       override router_port from the configuration
 -host string           override the bind address
@@ -536,10 +536,10 @@ The page is a deep-linkable single page: `#settings`,
 ## Troubleshooting
 
 **The service will not start.** Run the binary by hand — the reason is
-printed on stderr and in `journalctl --user -u engine-router`:
+printed on stderr and in `journalctl --user -u llm-pivot`:
 
 ```sh
-~/GITHUB/engine-router/engine-router -check
+~/GITHUB/llm-pivot/llm-pivot -check
 ```
 
 **An engine will not start.** Its stdout and stderr are in the monitor pane,
@@ -551,22 +551,22 @@ that is not there.
 `health_path`. Either it needs longer (raise **Startup timeout**), it listens
 on a different port than the engine's `port` (check what you passed as
 `--port`, or set `port_flag`), or it binds an address other than loopback —
-engine-router always connects to `127.0.0.1`.
+llm-pivot always connects to `127.0.0.1`.
 
 **"exited during startup".** The process died; the exit status and its last
 output are in the pane above the message.
 
 **"port N is already in use by another process".** Something is already
 listening there — usually an engine you started by hand earlier, or a
-previous engine-router. engine-router refuses to start on top of it on
+previous llm-pivot. llm-pivot refuses to start on top of it on
 purpose: the stranger would answer the health probe, the start would look
 successful, and your requests would be served by the wrong model. Find it
 with `ss -ltnp 'sport = :N'`, stop it, and start again.
 
 **A browser window opens whenever the engine starts.** That is the engine,
-not engine-router — several of them take a flag that pops the local page open
+not llm-pivot — several of them take a flag that pops the local page open
 when they are ready (strata's `--open`, for instance). Drop that flag from
-the engine's **Command**; engine-router never opens a browser itself. To keep
+the engine's **Command**; llm-pivot never opens a browser itself. To keep
 an eye on that page, point `monitor: embed` at it and it appears in the
 monitor pane instead.
 
@@ -580,14 +580,14 @@ different delays, and only the first is governed by the startup timeout:
 | Wait | Covered by | Typical |
 |---|---|---|
 | process start → port open | `startup_timeout_seconds` | seconds |
-| first request → first token (weights load) | **nothing in engine-router** | can be minutes |
+| first request → first token (weights load) | **nothing in llm-pivot** | can be minutes |
 
 Many engines open their port immediately and load the model lazily on the
 first request. Measured on a real strata engine: port open in **0.47 s**,
 first chat request **45 s**, second request **0.12 s**. For that engine the
 startup timeout is never the constraint.
 
-engine-router does not impose any deadline on the second wait — there is no
+llm-pivot does not impose any deadline on the second wait — there is no
 write timeout on the router port and no response-header timeout on the proxy
 transport, so it will wait as long as the engine takes. **Your client's
 timeout is the one that matters.** Worse, if the client gives up mid-load the
@@ -614,8 +614,8 @@ not name a model, or the engine is still loading. `GET /router/status` says
 which.
 
 **404 from a client, but the engine is running.** Check for
-`X-Engine-Router-Upstream` on the reply (see
-[Who answered?](#who-answered-x-engine-router)). If it is there, the engine
+`X-Llm-Pivot-Upstream` on the reply (see
+[Who answered?](#who-answered-x-llm-pivot)). If it is there, the engine
 rejected the *path*, not the model — the usual cause is a client base URL
 without `/v1`:
 
@@ -651,7 +651,7 @@ the base URL will not help.
   different models cannot spawn two engines.
 - **Process groups.** Engines are started in their own process group and
   signalled as a group, so wrapper scripts and child processes die with them.
-- **No starting on an occupied port.** Before spawning, engine-router checks
+- **No starting on an occupied port.** Before spawning, llm-pivot checks
   that nothing already listens on the engine's port. A stranded engine would
   otherwise answer the health probe and silently serve the wrong model.
 - **No deadline on generation.** The router sets no write timeout and no

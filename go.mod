@@ -1,4 +1,4 @@
-module engine-router
+module llm-pivot
 
 go 1.26.6
 

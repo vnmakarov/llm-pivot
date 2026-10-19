@@ -1,4 +1,4 @@
-// Command engine-router starts, stops and monitors local LLM engines
+// Command llm-pivot starts, stops and monitors local LLM engines
 // (llama.cpp, strata, ninfer, ...) and forwards OpenAI-compatible traffic to
 // whichever engine currently serves the requested model.
 package main
@@ -20,7 +20,7 @@ const Version = "1.0.0"
 
 func main() {
 	log.SetFlags(log.Ldate | log.Ltime)
-	log.SetPrefix("engine-router: ")
+	log.SetPrefix("llm-pivot: ")
 
 	var (
 		configPath  = flag.String("config", defaultConfigPath(), "path of the YAML configuration file")
@@ -35,7 +35,7 @@ func main() {
 	flag.Parse()
 
 	if *showVersion {
-		fmt.Println("engine-router", Version)
+		fmt.Println("llm-pivot", Version)
 		return
 	}
 
@@ -114,7 +114,7 @@ func main() {
 		die("cannot listen on the router port: %v", err)
 	}
 
-	mgr.Log().System(fmt.Sprintf("engine-router %s started; configuration %s", Version, cfg.Path()))
+	mgr.Log().System(fmt.Sprintf("llm-pivot %s started; configuration %s", Version, cfg.Path()))
 	mgr.Log().System(fmt.Sprintf("monitor page on port %d, OpenAI router on port %d",
 		cfg.MonitorPort, cfg.RouterPort))
 	log.Printf("configuration %s (%d engine(s), %d model(s))",
@@ -127,7 +127,7 @@ func main() {
 			log.Printf("received %s, shutting down", s)
 			break
 		}
-		// systemctl --user reload engine-router
+		// systemctl --user reload llm-pivot
 		res, err := mgr.Reload()
 		if err != nil {
 			log.Printf("reload refused: %v", err)
@@ -159,32 +159,32 @@ func countModels(c *Config) int {
 	return n
 }
 
-// defaultConfigPath honours $ENGINE_ROUTER_CONFIG, then $XDG_CONFIG_HOME.
+// defaultConfigPath honours $LLM_PIVOT_CONFIG, then $XDG_CONFIG_HOME.
 func defaultConfigPath() string {
-	if p := os.Getenv("ENGINE_ROUTER_CONFIG"); p != "" {
+	if p := os.Getenv("LLM_PIVOT_CONFIG"); p != "" {
 		return p
 	}
 	dir := os.Getenv("XDG_CONFIG_HOME")
 	if dir == "" {
 		home, err := os.UserHomeDir()
 		if err != nil {
-			return "engine-router.yaml"
+			return "llm-pivot.yaml"
 		}
 		dir = filepath.Join(home, ".config")
 	}
-	return filepath.Join(dir, "engine-router", "config.yaml")
+	return filepath.Join(dir, "llm-pivot", "config.yaml")
 }
 
 func die(format string, args ...any) {
-	fmt.Fprintf(os.Stderr, "engine-router: %s\n", fmt.Sprintf(format, args...))
+	fmt.Fprintf(os.Stderr, "llm-pivot: %s\n", fmt.Sprintf(format, args...))
 	os.Exit(1)
 }
 
 func usage() {
-	fmt.Fprintf(os.Stderr, `engine-router %s - start, stop and monitor local LLM engines.
+	fmt.Fprintf(os.Stderr, `llm-pivot %s - start, stop and monitor local LLM engines.
 
 Usage:
-  engine-router [flags]
+  llm-pivot [flags]
 
 The monitor page (default port 8061) manages engines and models. The router
 port (default 8078) accepts OpenAI-compatible requests and forwards them to

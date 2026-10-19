@@ -24,7 +24,7 @@ const (
 	StateFailed   = "failed"
 )
 
-// engineHost is the address engine-router connects to when talking to a
+// engineHost is the address llm-pivot connects to when talking to a
 // started engine. Engines are expected to listen on the loopback interface.
 const engineHost = "127.0.0.1"
 
@@ -513,7 +513,7 @@ func waitPortFree(port int, grace time.Duration) error {
 		}
 		last = err
 		if time.Now().After(deadline) {
-			return fmt.Errorf("port %d is already in use by another process, so engine-router "+
+			return fmt.Errorf("port %d is already in use by another process, so llm-pivot "+
 				"will not start on top of it (requests would reach the wrong engine); stop what "+
 				"is listening there - ss -ltnp 'sport = :%d' - or give the engine another port [%v]",
 				port, port, last)
@@ -561,11 +561,11 @@ func (m *Manager) pollMonitor(ctx context.Context, in *instance, url string, eve
 	}
 }
 
-// Shutdown stops the engine when engine-router itself exits.
+// Shutdown stops the engine when llm-pivot itself exits.
 func (m *Manager) Shutdown() {
 	m.opMu.Lock()
 	defer m.opMu.Unlock()
-	m.stopLocked("engine-router is shutting down")
+	m.stopLocked("llm-pivot is shutting down")
 }
 
 // ------------------------------------------------------------- command line

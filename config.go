@@ -69,7 +69,7 @@ type Engine struct {
 	Models []*Model `yaml:"models" json:"models"`
 }
 
-// Config is the whole persisted state of engine-router.
+// Config is the whole persisted state of llm-pivot.
 type Config struct {
 	MonitorPort    int       `yaml:"monitor_port" json:"monitor_port"`
 	RouterPort     int       `yaml:"router_port" json:"router_port"`
@@ -335,7 +335,7 @@ func (c *Config) Save() error {
 	if err != nil {
 		return err
 	}
-	header := "# engine-router configuration.\n" +
+	header := "# llm-pivot configuration.\n" +
 		"# Rewritten by the monitor page; hand-written comments are not preserved.\n"
 	data = append([]byte(header), data...)
 
@@ -365,7 +365,7 @@ func (c *Config) Path() string { return c.path }
 
 // defaultConfigYAML is written when no configuration file exists yet. It is a
 // literal so that the explanatory comments survive the first start.
-const defaultConfigYAML = `# engine-router configuration.
+const defaultConfigYAML = `# llm-pivot configuration.
 #
 # monitor_port  port of the monitoring / settings web page
 # router_port   OpenAI-compatible port forwarded to the running engine

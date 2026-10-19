@@ -12,7 +12,7 @@ import (
 const (
 	StreamStdout = "stdout"
 	StreamStderr = "stderr"
-	StreamSystem = "system" // engine-router's own notes (start, exit, errors)
+	StreamSystem = "system" // llm-pivot's own notes (start, exit, errors)
 )
 
 // LogLine is one captured line of engine output.

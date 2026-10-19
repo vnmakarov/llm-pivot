@@ -1,6 +1,6 @@
 # The compiled server. Anchored to the repo root so it cannot match the
 # web/ assets or anything else that shares the name.
-/engine-router
+/llm-pivot
 
 # Go build and test artefacts
 *.test

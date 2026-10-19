@@ -23,16 +23,16 @@ const maxInspectBody = 64 << 20
 
 // Response headers that say who actually answered a request.
 //
-//	X-Engine-Router           always set; you are talking to engine-router
-//	X-Engine-Router-Upstream  only on proxied replies: "<engine>/<model>:<port>"
+//	X-Llm-Pivot           always set; you are talking to llm-pivot
+//	X-Llm-Pivot-Upstream  only on proxied replies: "<engine>/<model>:<port>"
 //
 // So a response carrying the Upstream header came from the engine, and one
-// without it was produced by engine-router itself. That distinction is the
+// without it was produced by llm-pivot itself. That distinction is the
 // difference between "my client asked for a path this engine does not serve"
-// and "engine-router could not route this".
+// and "llm-pivot could not route this".
 const (
-	HeaderRouter   = "X-Engine-Router"
-	HeaderUpstream = "X-Engine-Router-Upstream"
+	HeaderRouter   = "X-Llm-Pivot"
+	HeaderUpstream = "X-Llm-Pivot-Upstream"
 )
 
 type targetCtxKey struct{}
@@ -74,7 +74,7 @@ func NewRouter(mgr *Manager) *Router {
 			resp.Header.Set(HeaderUpstream, t.String())
 			// Make the engine's own rejections visible on the monitor page.
 			// Without this a 404 from the engine looks identical to a 404
-			// from engine-router to anyone reading the page.
+			// from llm-pivot to anyone reading the page.
 			if resp.StatusCode >= 400 {
 				rt.logUpstreamError(t, resp.Request.Method, resp.Request.URL.Path, resp.StatusCode)
 			}
@@ -111,7 +111,7 @@ func (rt *Router) logUpstreamError(t routeTarget, method, path string, code int)
 	if !rt.throttle.allow(fmt.Sprintf("%d %s %s", code, method, path), 10*time.Second) {
 		return
 	}
-	msg := fmt.Sprintf("engine %q answered %d to %s %s (the engine rejected it, not engine-router)",
+	msg := fmt.Sprintf("engine %q answered %d to %s %s (the engine rejected it, not llm-pivot)",
 		t.engine, code, method, path)
 	if code == http.StatusNotFound && !strings.HasPrefix(path, "/v1/") {
 		msg += fmt.Sprintf("; %q has no %q — most OpenAI engines only serve /v1/…, "+
@@ -151,7 +151,7 @@ func (t *logThrottle) allow(key string, every time.Duration) bool {
 
 func (rt *Router) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Stamped on everything, including the replies below that never reach an
-	// engine, so a client can always tell engine-router is in the path.
+	// engine, so a client can always tell llm-pivot is in the path.
 	w.Header().Set(HeaderRouter, Version)
 
 	switch {
@@ -174,7 +174,7 @@ func (rt *Router) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		cfg := rt.mgr.Config()
 		if eng, _ := cfg.FindModel(wanted); eng == nil {
 			writeOpenAIError(w, http.StatusNotFound,
-				"model "+strconv.Quote(wanted)+" is not configured in engine-router; "+
+				"model "+strconv.Quote(wanted)+" is not configured in llm-pivot; "+
 					"add it on the monitor page or GET /v1/models for the list",
 				"model_not_found")
 			return

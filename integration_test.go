@@ -67,7 +67,7 @@ func TestHelperEngine(t *testing.T) {
 	})
 	srv := &http.Server{Addr: "127.0.0.1:" + port, Handler: mux}
 
-	// Exit cleanly on the SIGTERM engine-router sends.
+	// Exit cleanly on the SIGTERM llm-pivot sends.
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGTERM, syscall.SIGINT)
 	go func() { <-stop; srv.Close(); os.Exit(0) }()
@@ -532,7 +532,7 @@ func TestUpstreamErrorsAreAttributed(t *testing.T) {
 	text := logText(mgr)
 	for _, want := range []string{
 		`engine "fake" answered 404 to POST /chat/completions`,
-		"not engine-router",
+		"not llm-pivot",
 		"base URL ends in /v1",
 	} {
 		if !strings.Contains(text, want) {
@@ -542,7 +542,7 @@ func TestUpstreamErrorsAreAttributed(t *testing.T) {
 }
 
 // TestRouterOwnErrorsCarryNoUpstreamHeader is the other half: a reply that
-// engine-router produced itself must not look like it came from an engine.
+// llm-pivot produced itself must not look like it came from an engine.
 func TestRouterOwnErrorsCarryNoUpstreamHeader(t *testing.T) {
 	mgr := testManager(t, []*Model{{Name: "alpha"}}, nil)
 	srv := httptest.NewServer(NewRouter(mgr))
@@ -558,7 +558,7 @@ func TestRouterOwnErrorsCarryNoUpstreamHeader(t *testing.T) {
 		t.Fatalf("status = %d, want 404", resp.StatusCode)
 	}
 	if got := resp.Header.Get(HeaderUpstream); got != "" {
-		t.Errorf("%s = %q, want it absent on engine-router's own reply", HeaderUpstream, got)
+		t.Errorf("%s = %q, want it absent on llm-pivot's own reply", HeaderUpstream, got)
 	}
 	if resp.Header.Get(HeaderRouter) != Version {
 		t.Errorf("%s is missing", HeaderRouter)

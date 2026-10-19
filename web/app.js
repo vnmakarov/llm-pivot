@@ -1,4 +1,4 @@
-/* engine-router monitor page. Vanilla JS, no build step. */
+/* llm-pivot monitor page. Vanilla JS, no build step. */
 'use strict';
 
 const S = {
@@ -58,7 +58,7 @@ async function poll() {
     renderDetail();
     renderMonitor();
   } catch (e) {
-    $('top-text').textContent = 'engine-router is not answering';
+    $('top-text').textContent = 'llm-pivot is not answering';
     $('top-light').className = 'light failed';
   }
 }
@@ -702,7 +702,7 @@ function renderEmbed(st) {
 /* ------------------------------------------------- monitor pane resizing */
 
 const MONITOR_MIN = 170;
-const MONITOR_KEY = 'engine-router.monitorHeight';
+const MONITOR_KEY = 'llm-pivot.monitorHeight';
 
 function monitorMax() {
   const content = $('content');

@@ -98,7 +98,7 @@ func sameStrings(a, b []string) bool {
 }
 
 // Reload re-reads the configuration file from disk, which is what SIGHUP
-// (systemctl --user reload engine-router) does. A file that does not
+// (systemctl --user reload llm-pivot) does. A file that does not
 // validate is rejected and the running configuration is kept.
 func (m *Manager) Reload() (*EditResult, error) {
 	editMu.Lock()

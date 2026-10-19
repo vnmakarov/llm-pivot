@@ -1,0 +1,22 @@
+[Unit]
+Description=llm-pivot - start, stop and monitor local LLM engines
+Documentation=file:%h/GITHUB/llm-pivot/README.md
+After=network.target
+
+[Service]
+Type=exec
+WorkingDirectory=%h
+ExecStart=%h/GITHUB/llm-pivot/llm-pivot --config %h/.config/llm-pivot/config.yaml
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=on-failure
+RestartSec=5
+
+# llm-pivot forwards SIGTERM to the engine it started and waits for it.
+KillMode=mixed
+TimeoutStopSec=45
+
+Environment=HOME=%h
+SyslogIdentifier=llm-pivot
+
+[Install]
+WantedBy=default.target
