@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>engine-router</title>
+<link rel="stylesheet" href="style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⚙️</text></svg>">
+</head>
+<body>
+
+<header id="topbar">
+  <div class="brand">
+    <span class="logo">⚙</span>
+    <span class="title">engine&#8209;router</span>
+    <span class="version" id="version"></span>
+  </div>
+  <div class="topstatus">
+    <span class="light" id="top-light"></span>
+    <span id="top-text">connecting…</span>
+  </div>
+  <div class="topports">
+    <span class="chip" id="chip-router" title="OpenAI-compatible port"></span>
+    <span class="chip" id="chip-monitor" title="Monitor page port"></span>
+  </div>
+</header>
+
+<div id="toasts"></div>
+
+<main>
+  <!-- ------------------------------------------------ left: engines/models -->
+  <nav id="sidebar">
+    <div class="side-section">
+      <button class="side-item" id="item-settings" data-kind="settings">
+        <span class="side-icon">⚙</span><span class="side-label">Settings</span>
+      </button>
+    </div>
+    <div class="side-head">
+      <span>Engines</span>
+      <button class="mini" id="btn-add-engine" title="Add an engine">+</button>
+    </div>
+    <div id="tree"></div>
+    <div class="side-foot" id="config-path"></div>
+  </nav>
+
+  <!-- --------------------------------------------- right: details + monitor -->
+  <section id="content">
+    <div id="detail"></div>
+
+    <div id="monitor-resizer" role="separator" aria-orientation="horizontal"
+         tabindex="0" title="Drag to resize the monitor"><span></span></div>
+
+    <div class="card monitor-card" id="monitor-card">
+      <div class="card-head">
+        <h2 id="monitor-title">Engine monitor</h2>
+        <div class="tabs" id="monitor-tabs" hidden>
+          <button class="tab active" data-tab="http">Engine monitor</button>
+          <button class="tab" data-tab="log">Process output</button>
+        </div>
+        <div class="card-head-right">
+          <button class="btn subtle" id="btn-reload-embed" hidden title="Reload the framed page">↻</button>
+          <a class="btn subtle" id="btn-open-embed" hidden target="_blank" rel="noopener">Open ↗</a>
+          <label class="check"><input type="checkbox" id="follow" checked> Follow</label>
+          <button class="btn subtle" id="btn-clear-log">Clear</button>
+        </div>
+      </div>
+      <div id="monitor-meta" class="monitor-meta"></div>
+      <pre id="logview" class="logview"></pre>
+      <pre id="httpview" class="logview" hidden></pre>
+      <iframe id="embedview" class="embedview" hidden title="Engine monitoring page"
+              referrerpolicy="no-referrer"></iframe>
+    </div>
+  </section>
+</main>
+
+<script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,400 @@
+/* engine-router monitor page - Apple system fonts, light background. */
+
+:root {
+  --bg:          #f5f5f7;
+  --panel:       #ffffff;
+  --panel-2:     #fbfbfd;
+  --ink:         #1d1d1f;
+  --ink-2:       #6e6e73;
+  --ink-3:       #86868b;
+  --line:        #d2d2d7;
+  --line-soft:   #e8e8ed;
+  --accent:      #0071e3;
+  --accent-ink:  #ffffff;
+  --green:       #34c759;
+  --amber:       #ff9f0a;
+  --red:         #ff3b30;
+  --grey:        #c7c7cc;
+  --radius:      12px;
+  --topbar-h:    52px;
+  --monitor-h:   340px;   /* fixed height of the monitor pane; drag to change */
+  --sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display",
+          "Helvetica Neue", Helvetica, "Segoe UI", Arial, sans-serif;
+  --mono: "SF Mono", ui-monospace, SFMono-Regular, Menlo, Monaco,
+          "Cascadia Mono", "Roboto Mono", monospace;
+}
+
+* { box-sizing: border-box; }
+
+/* Class rules below set `display`, which would otherwise beat the user-agent
+   rule for the hidden attribute. */
+[hidden] { display: none !important; }
+
+html, body {
+  margin: 0;
+  height: 100%;
+  /* The page itself never scrolls: the two panes scroll inside it, which is
+     what keeps the monitor pane fully visible at all times. */
+  overflow: hidden;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: 14px;
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ----------------------------------------------------------------- topbar */
+
+#topbar {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  height: var(--topbar-h);
+  padding: 0 18px;
+  background: rgba(255,255,255,.82);
+  backdrop-filter: saturate(180%) blur(20px);
+  border-bottom: 1px solid var(--line);
+  position: sticky;
+  top: 0;
+  z-index: 20;
+}
+.brand { display: flex; align-items: baseline; gap: 8px; }
+.brand .logo { font-size: 17px; }
+.brand .title { font-size: 16px; font-weight: 600; letter-spacing: -.01em; }
+.brand .version { font-size: 11px; color: var(--ink-3); }
+
+.topstatus { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--ink-2); }
+.topports { margin-left: auto; display: flex; gap: 8px; }
+
+.chip {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--ink-2);
+  background: var(--panel-2);
+  border: 1px solid var(--line-soft);
+  border-radius: 999px;
+  padding: 3px 10px;
+  white-space: nowrap;
+}
+
+/* ------------------------------------------------------------------ light */
+
+.light {
+  width: 9px; height: 9px;
+  border-radius: 50%;
+  background: var(--grey);
+  flex: none;
+  box-shadow: 0 0 0 1px rgba(0,0,0,.06) inset;
+}
+.light.running  { background: var(--green); box-shadow: 0 0 0 3px rgba(52,199,89,.18); }
+.light.starting { background: var(--amber); box-shadow: 0 0 0 3px rgba(255,159,10,.18);
+                  animation: pulse 1.1s ease-in-out infinite; }
+.light.stopping { background: var(--amber); }
+.light.failed   { background: var(--red);   box-shadow: 0 0 0 3px rgba(255,59,48,.16); }
+@keyframes pulse { 0%,100% { opacity: 1 } 50% { opacity: .35 } }
+
+/* ----------------------------------------------------------------- layout */
+
+main {
+  display: grid;
+  grid-template-columns: 272px 1fr;
+  align-items: stretch;
+  gap: 18px;
+  padding: 18px;
+  max-width: 1500px;
+  margin: 0 auto;
+  height: calc(100vh - var(--topbar-h));
+  overflow: hidden;
+}
+
+/* ---------------------------------------------------------------- sidebar */
+
+#sidebar {
+  background: var(--panel);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius);
+  padding: 8px;
+  height: 100%;
+  overflow: auto;
+}
+.side-section { padding-bottom: 4px; }
+.side-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 10px 10px 6px;
+  font-size: 11px; font-weight: 600; letter-spacing: .06em;
+  text-transform: uppercase; color: var(--ink-3);
+  border-top: 1px solid var(--line-soft);
+  margin-top: 4px;
+}
+.side-item {
+  display: flex; align-items: center; gap: 8px;
+  width: 100%;
+  padding: 7px 10px;
+  border: 0; border-radius: 8px;
+  background: transparent;
+  font: inherit; color: var(--ink);
+  text-align: left;
+  cursor: pointer;
+}
+.side-item:hover { background: var(--panel-2); }
+.side-item.active { background: var(--accent); color: var(--accent-ink); }
+.side-item.active .side-sub, .side-item.active .side-icon { color: rgba(255,255,255,.8); }
+.side-icon { color: var(--ink-3); width: 14px; text-align: center; flex: none; }
+.side-label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.side-sub { font-size: 11px; color: var(--ink-3); font-family: var(--mono); flex: none; }
+
+.engine-row { font-weight: 600; margin-top: 2px; }
+.model-row  { padding-left: 30px; }          /* indented under its engine */
+.model-row .side-label { font-weight: 400; }
+.engine-empty {
+  padding: 4px 10px 6px 30px;
+  font-size: 12px; color: var(--ink-3); font-style: italic;
+}
+.add-model-row { padding-left: 30px; color: var(--ink-2); font-size: 13px; }
+
+.side-foot {
+  margin-top: 10px; padding: 8px 10px;
+  border-top: 1px solid var(--line-soft);
+  font-size: 11px; color: var(--ink-3);
+  font-family: var(--mono);
+  word-break: break-all;
+}
+
+.mini {
+  width: 20px; height: 20px; line-height: 1;
+  border: 1px solid var(--line); border-radius: 6px;
+  background: var(--panel); color: var(--ink-2);
+  font-size: 14px; cursor: pointer;
+}
+.mini:hover { background: var(--accent); color: #fff; border-color: var(--accent); }
+
+/* ---------------------------------------------------------------- content */
+
+/* The right column is split in two: the selected engine/model scrolls on
+   top, the monitor keeps a fixed height at the bottom. */
+#content {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+}
+#detail {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+/* Drag handle between the two. */
+#monitor-resizer {
+  flex: none;
+  height: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: row-resize;
+  touch-action: none;
+}
+#monitor-resizer span {
+  display: block;
+  width: 46px; height: 4px;
+  border-radius: 2px;
+  background: var(--line);
+  transition: background .12s;
+}
+#monitor-resizer:hover span,
+#monitor-resizer.dragging span { background: var(--accent); }
+#monitor-resizer:focus-visible { outline: none; }
+#monitor-resizer:focus-visible span { background: var(--accent); width: 80px; }
+
+.card {
+  background: var(--panel);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius);
+  padding: 18px 20px 20px;
+}
+.card-head {
+  display: flex; align-items: center; gap: 14px;
+  margin-bottom: 14px;
+}
+.card-head h2 {
+  margin: 0; font-size: 16px; font-weight: 600; letter-spacing: -.01em;
+}
+.card-head-right { margin-left: auto; display: flex; align-items: center; gap: 10px; }
+.card-sub { margin: -8px 0 16px; color: var(--ink-2); font-size: 13px; }
+
+/* ------------------------------------------------------------------ forms */
+
+.field { margin-bottom: 14px; }
+.field label {
+  display: block; margin-bottom: 5px;
+  font-size: 12px; font-weight: 600; color: var(--ink-2);
+}
+.field .hint { font-weight: 400; color: var(--ink-3); }
+.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0 16px; }
+.grid3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 0 16px; }
+
+input[type=text], input[type=number], textarea, select {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  font: inherit;
+  color: var(--ink);
+}
+textarea { font-family: var(--mono); font-size: 12.5px; line-height: 1.5; resize: vertical; }
+input:focus, textarea:focus, select:focus {
+  outline: none; border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(0,113,227,.15);
+}
+input[readonly] { background: var(--panel-2); color: var(--ink-2); }
+
+.check { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--ink-2); }
+
+/* ---------------------------------------------------------------- buttons */
+
+.btn {
+  padding: 7px 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--ink);
+  font: inherit; font-weight: 500;
+  cursor: pointer;
+}
+.btn:hover { background: var(--panel-2); }
+.btn:disabled { opacity: .4; cursor: not-allowed; }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.btn.primary:hover { background: #0077ed; }
+.btn.green { background: var(--green); border-color: var(--green); color: #fff; }
+.btn.green:hover { filter: brightness(1.05); }
+.btn.danger { color: var(--red); }
+.btn.danger:hover { background: #fff2f1; }
+.btn.subtle { border-color: transparent; color: var(--ink-2); background: transparent; }
+.btn.subtle:hover { background: var(--panel-2); }
+
+.actions { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-top: 4px; }
+.actions .spacer { flex: 1; }
+
+/* ------------------------------------------------------------------ misc. */
+
+.statline {
+  display: flex; flex-wrap: wrap; gap: 8px 18px;
+  padding: 12px 14px; margin-bottom: 16px;
+  background: var(--panel-2);
+  border: 1px solid var(--line-soft);
+  border-radius: 10px;
+  font-size: 12.5px;
+}
+.statline b { font-weight: 600; color: var(--ink-2); font-size: 11px;
+              text-transform: uppercase; letter-spacing: .04em; margin-right: 6px; }
+.statline span.v { font-family: var(--mono); }
+
+.cmdbox {
+  font-family: var(--mono); font-size: 12px; line-height: 1.6;
+  background: var(--panel-2);
+  border: 1px solid var(--line-soft);
+  border-radius: 8px;
+  padding: 10px 12px;
+  white-space: pre-wrap; word-break: break-all;
+  color: var(--ink-2);
+  margin: 0;
+}
+
+.banner {
+  padding: 10px 12px; border-radius: 8px; font-size: 13px; margin-bottom: 14px;
+}
+.banner.error { background: #fff2f1; border: 1px solid #ffd3cf; color: #b3271e; }
+.banner.info  { background: #eef6ff; border: 1px solid #cfe4fb; color: #0a5bb5; }
+
+.tabs { display: flex; gap: 4px; }
+.tab {
+  padding: 4px 11px; border-radius: 7px; border: 1px solid transparent;
+  background: transparent; font: inherit; font-size: 12.5px;
+  color: var(--ink-2); cursor: pointer;
+}
+.tab.active { background: var(--panel-2); border-color: var(--line-soft); color: var(--ink); }
+
+/* Fixed height, always fully on screen; only its log scrolls. */
+.monitor-card {
+  display: flex;
+  flex-direction: column;
+  flex: 0 0 var(--monitor-h);
+  height: var(--monitor-h);
+  min-height: 0;
+  overflow: hidden;
+  padding-bottom: 18px;
+}
+.monitor-card .card-head { flex: none; }
+.monitor-meta {
+  flex: none;
+  font-size: 12px; color: var(--ink-3); font-family: var(--mono);
+  margin-bottom: 8px; white-space: pre-wrap; word-break: break-all;
+  max-height: 3.4em; overflow: auto;      /* never squeeze the log out */
+}
+
+.logview {
+  flex: 1 1 auto;
+  margin: 0;
+  min-height: 0;
+  overflow: auto;
+  padding: 12px 14px;
+  background: var(--panel-2);
+  border: 1px solid var(--line-soft);
+  border-radius: 10px;
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: #2b2b30;
+}
+/* The engine's own monitoring page, framed. */
+.embedview {
+  flex: 1 1 auto;
+  min-height: 0;
+  width: 100%;
+  border: 1px solid var(--line-soft);
+  border-radius: 10px;
+  background: var(--panel-2);
+}
+
+.logview .t   { color: var(--ink-3); }
+.logview .sys { color: var(--accent); }
+.logview .err { color: #9a3412; }
+.logview .gap { color: var(--ink-3); font-style: italic; }
+.empty { color: var(--ink-3); font-style: italic; }
+
+/* ----------------------------------------------------------------- toasts */
+
+#toasts {
+  position: fixed; top: 64px; right: 18px; z-index: 50;
+  display: flex; flex-direction: column; gap: 8px;
+  max-width: 420px;
+}
+.toast {
+  background: rgba(30,30,32,.94);
+  color: #fff;
+  padding: 10px 14px;
+  border-radius: 10px;
+  font-size: 13px;
+  box-shadow: 0 8px 24px rgba(0,0,0,.18);
+  animation: slidein .18s ease-out;
+}
+.toast.error { background: rgba(179,39,30,.96); }
+.toast.ok    { background: rgba(28,120,62,.96); }
+@keyframes slidein { from { opacity: 0; transform: translateY(-6px) } to { opacity: 1 } }
+
+/* Narrow screens: fall back to a normally scrolling document. */
+@media (max-width: 880px) {
+  html, body { overflow: auto; }
+  main { grid-template-columns: 1fr; height: auto; overflow: visible; }
+  #sidebar { height: auto; max-height: none; }
+  #content { height: auto; }
+  #detail { overflow: visible; }
+  #monitor-resizer { display: none; }
+  .monitor-card { flex: none; height: 420px; }
+}
