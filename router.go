@@ -210,6 +210,7 @@ func (rt *Router) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	defer rt.mgr.MarkUsed()()
 	rt.proxy.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), targetCtxKey{}, target)))
 }
 

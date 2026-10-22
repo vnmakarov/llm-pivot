@@ -15,6 +15,23 @@ Two ports:
 the page or implicitly, by an OpenAI request naming it — kills whatever was
 running before.
 
+llm-pivot is mostly written by Claude Opus 5.
+
+---
+
+## Contents
+
+- [Why](#why)
+- [Install](#install)
+- [Running under systemd](#running-under-systemd---user)
+- [The monitor page](#the-monitor-page)
+- [Routing OpenAI requests](#routing-openai-requests)
+- [Configuration file](#configuration-file)
+- [How engine and model options are merged](#how-engine-and-model-options-are-merged)
+- [Command-line flags](#command-line-flags)
+- [HTTP API](#http-api)
+- [Troubleshooting](#troubleshooting)
+
 ---
 
 ## Why
@@ -34,21 +51,6 @@ whatever is running. I hope it is useful to other people with the same
 problems.
 
 llm-pivot is mostly written by Claude Opus 5.
-
----
-
-## Contents
-
-- [Why](#why)
-- [Install](#install)
-- [Running under systemd](#running-under-systemd---user)
-- [The monitor page](#the-monitor-page)
-- [Routing OpenAI requests](#routing-openai-requests)
-- [Configuration file](#configuration-file)
-- [How engine and model options are merged](#how-engine-and-model-options-are-merged)
-- [Command-line flags](#command-line-flags)
-- [HTTP API](#http-api)
-- [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -123,8 +125,8 @@ The shipped unit assumes the binary lives at
 `~/.config/llm-pivot/config.yaml`; edit `ExecStart` if yours differ.
 
 On stop, llm-pivot sends `SIGTERM` to the engine's whole process group,
-waits `stop_timeout_seconds`, then `SIGKILL`s it. **No engine is ever left
-behind.**
+waits `graceful_stop_timeout_seconds`, then `SIGKILL`s it. **No engine is ever
+left behind.**
 
 ---
 
@@ -132,7 +134,7 @@ behind.**
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────┐
-│ ⚙ llm-pivot   ● llama.cpp · qwen3-30b — running 4m    router :8078   │
+│ ⚙ llm-pivot   ● llama.cpp · qwen3-30b — running 4m    router :8078       │
 ├────────────────────┬─────────────────────────────────────────────────────┤
 │ ⚙ Settings         │  Model · qwen3-30b                                  │
 │                    │  ┌───────────────────────────────────────────────┐  │
@@ -142,7 +144,7 @@ behind.**
 │     ○ gemma3-27b   │  Options          [ -m /models/qwen3-30b.gguf    ]  │
 │     + Add model    │  Effective command line                             │
 │ ▸ strata    :8090  │  /path/llama-server … -m /models/… --port 8080      │
-│     ○ phi4-mini    │  [Save model] [Restart] [Stop] [Copy]  [Delete]     │
+│     ○ phi4-mini    │ [Save model] [Restart] [Stop] [Copy model] [Delete] │
 │     + Add model    │ ─────────────────────────────────────────────────── │
 │                    │  Engine monitor · llama.cpp · qwen3-30b             │
 │ ~/.config/…yaml    │  ┌───────────────────────────────────────────────┐  │
@@ -261,19 +263,32 @@ On a model page:
   first, then starts this one and waits for it to answer.
 - **Restart** — kills and starts the same model.
 - **Stop** — kills the running engine; nothing is serving afterwards.
-- **Copy** — adds `<model name>-copy` to the same engine with the saved
+- **Copy model** — adds `<model name>-copy` to the same engine with the saved
   options copied verbatim, and opens it. Nothing is started or stopped.
   Copying twice is refused: the second `-copy` would duplicate the first.
 
 Editing a running engine or its model **stops it**, with a note explaining
 why; start it again when you are done editing.
 
+An engine also stops **by itself** once `inactive_stop_timeout_seconds` passes
+without a request being proxied to it, freeing the VRAM; the monitoring output
+says why. Only proxied requests count: `/v1/models`, `/router/status` and
+watching the monitor page do **not** keep an engine alive. A request in flight
+always does, however long the generation takes — a slow reply is never cut off
+by this timeout. Set it to `-1` to keep an engine running forever.
+
 ### Settings
 
-Monitor port, router port, bind address, startup/stop timeouts and the log
-buffer size. Saving reopens the listeners immediately — no restart. If you
-changed the monitor port the page moves itself to the new address. The
-running engine is **not** disturbed by a port change.
+Monitor port, router port, bind address, startup timeout, graceful stop timeout,
+inactive stop timeout, and the log buffer size. Saving reopens the listeners
+immediately — no restart. If you changed the monitor port the page moves itself
+to the new address. The running engine is **not** disturbed by a port change.
+
+**Timeouts:**
+- **Startup timeout** — how long to wait for a freshly started engine to answer
+- **Graceful stop timeout** — grace period for a stopping engine before killing it
+- **Inactive stop timeout** — stop the engine after this long without a single
+  routed request (`-1` keeps it running forever)
 
 > The bind address defaults to `127.0.0.1`. Set it to `0.0.0.0` only if you
 > want the page and the router reachable from the network — neither has any
@@ -380,12 +395,13 @@ The page writes this file back on every change. **Hand-written comments are
 not preserved** once you save from the page.
 
 ```yaml
-monitor_port: 8061            # the web page
-router_port: 8078             # OpenAI-compatible port
-host: 127.0.0.1               # bind address for both
-startup_timeout_seconds: 180  # how long an engine may take to answer
-stop_timeout_seconds: 20      # SIGTERM grace period before SIGKILL
-log_lines: 4000               # monitoring buffer size
+monitor_port: 8061                    # the web page
+router_port: 8078                     # OpenAI-compatible port
+host: 127.0.0.1                       # bind address for both
+startup_timeout_seconds: 180          # how long an engine may take to answer
+graceful_stop_timeout_seconds: 20     # SIGTERM grace period before SIGKILL
+inactive_stop_timeout_seconds: 600    # stop an idle engine after this long; -1 never
+log_lines: 4000                       # monitoring buffer size
 
 engines:
   - name: llama.cpp
@@ -429,7 +445,8 @@ engines:
 | `router_port` | `8078` | OpenAI port; must differ from `monitor_port` |
 | `host` | `127.0.0.1` | bind address for both ports |
 | `startup_timeout_seconds` | `180` | global startup budget |
-| `stop_timeout_seconds` | `20` | `SIGTERM` grace before `SIGKILL` |
+| `graceful_stop_timeout_seconds` | `20` | `SIGTERM` grace before `SIGKILL` |
+| `inactive_stop_timeout_seconds` | `600` | stop an idle engine after this long; `-1` never does |
 | `log_lines` | `4000` | lines kept in the monitoring buffer |
 | `engines` | — | list of engines |
 
@@ -567,7 +584,7 @@ be scripted.
 |---|---|
 | `GET /api/state?since=<seq>` | configuration, runtime status, and log lines newer than `seq` |
 | `GET /api/command?model=<name>` | the effective command line for a model |
-| `PUT /api/settings` | `{monitor_port, router_port, host, startup_timeout_seconds, stop_timeout_seconds, log_lines}` |
+| `PUT /api/settings` | `{monitor_port, router_port, host, startup_timeout_seconds, graceful_stop_timeout_seconds, inactive_stop_timeout_seconds, log_lines}` |
 | `POST /api/engines` | engine fields plus `original` (empty = create, otherwise the name being edited) |
 | `DELETE /api/engines/{engine}` | removes the engine and its models |
 | `POST /api/models` | `{engine, original, name, options}` |

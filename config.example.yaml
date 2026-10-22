@@ -4,7 +4,8 @@ monitor_port: 8061
 router_port: 8078
 host: 127.0.0.1
 startup_timeout_seconds: 180
-stop_timeout_seconds: 20
+graceful_stop_timeout_seconds: 20
+inactive_stop_timeout_seconds: 600
 log_lines: 4000
 engines:
     - name: llama.cpp

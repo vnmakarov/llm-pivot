@@ -60,6 +60,12 @@ func TestHelperEngine(t *testing.T) {
 	mux.HandleFunc("/metrics", func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(w, "engine_tag{tag=%q} 1\n", tag)
 	})
+	// Stands in for a slow generation: the reply only starts after ?ms.
+	mux.HandleFunc("/v1/hang", func(w http.ResponseWriter, r *http.Request) {
+		ms, _ := strconv.Atoi(r.URL.Query().Get("ms"))
+		time.Sleep(time.Duration(ms) * time.Millisecond)
+		io.WriteString(w, `{"slow":true}`)
+	})
 	mux.HandleFunc("/v1/chat/completions", func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
 		w.Header().Set("Content-Type", "application/json")
@@ -683,6 +689,156 @@ func TestDeleteEngineRemovesItsModels(t *testing.T) {
 	}
 	if e, _ := cfg.FindModel("alpha"); e != nil {
 		t.Error("the model outlived its engine")
+	}
+}
+
+// ------------------------------------------------------- inactive stop
+
+// ageLastUsed backdates the running instance, so the idle reaper can be tested
+// without sleeping through a real timeout.
+func ageLastUsed(t *testing.T, mgr *Manager, d time.Duration) {
+	t.Helper()
+	mgr.mu.Lock()
+	defer mgr.mu.Unlock()
+	if mgr.inst == nil {
+		t.Fatal("nothing is running")
+	}
+	mgr.inst.lastUsed = time.Now().Add(-d)
+}
+
+func TestInactiveStopTimeoutStopsAnIdleEngine(t *testing.T) {
+	mgr := testManager(t, []*Model{{Name: "alpha"}}, nil)
+	mgr.cfg.InactiveStopTimeout = 60
+
+	if err := mgr.Start("alpha"); err != nil {
+		t.Fatal(err)
+	}
+	pid := mgr.Status().PID
+
+	if mgr.CheckInactivity() {
+		t.Fatal("a freshly started engine was reaped as idle")
+	}
+	if st := mgr.Status(); st.State != StateRunning {
+		t.Fatalf("engine should still run: %+v", st)
+	}
+
+	ageLastUsed(t, mgr, 61*time.Second)
+	if !mgr.CheckInactivity() {
+		t.Fatal("an engine idle past the timeout was not stopped")
+	}
+	if st := mgr.Status(); st.State != StateIdle || st.Model != "" {
+		t.Fatalf("after the idle stop: %+v", st)
+	}
+	assertProcessGone(t, pid)
+
+	// Nothing is running any more, so there is nothing left to reap.
+	if mgr.CheckInactivity() {
+		t.Error("CheckInactivity reported a stop with no engine running")
+	}
+}
+
+func TestInactiveStopTimeoutNegativeNeverStops(t *testing.T) {
+	mgr := testManager(t, []*Model{{Name: "alpha"}}, nil)
+	mgr.cfg.InactiveStopTimeout = -1
+
+	if err := mgr.Start("alpha"); err != nil {
+		t.Fatal(err)
+	}
+	ageLastUsed(t, mgr, 365*24*time.Hour)
+	if mgr.CheckInactivity() {
+		t.Fatal("a negative inactive_stop_timeout_seconds must disable the idle stop")
+	}
+	if st := mgr.Status(); st.State != StateRunning {
+		t.Fatalf("engine should still run: %+v", st)
+	}
+}
+
+func TestRoutedRequestKeepsEngineAlive(t *testing.T) {
+	mgr := testManager(t, []*Model{{Name: "alpha"}}, nil)
+	mgr.cfg.InactiveStopTimeout = 60
+	srv := httptest.NewServer(NewRouter(mgr))
+	defer srv.Close()
+
+	if err := mgr.Start("alpha"); err != nil {
+		t.Fatal(err)
+	}
+	ageLastUsed(t, mgr, 61*time.Second)
+
+	resp, err := http.Post(srv.URL+"/v1/chat/completions", "application/json",
+		strings.NewReader(`{"model":"alpha","messages":[]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	io.Copy(io.Discard, resp.Body)
+	resp.Body.Close()
+
+	// The request reset the idle clock, so the engine must survive the sweep.
+	if mgr.CheckInactivity() {
+		t.Fatal("an engine that just served a request was reaped as idle")
+	}
+	if st := mgr.Status(); st.State != StateRunning {
+		t.Fatalf("engine should still run: %+v", st)
+	}
+}
+
+func TestInFlightRequestIsNeverReapedAsIdle(t *testing.T) {
+	mgr := testManager(t, []*Model{{Name: "alpha"}}, nil)
+	mgr.cfg.InactiveStopTimeout = 60
+	srv := httptest.NewServer(NewRouter(mgr))
+	defer srv.Close()
+
+	if err := mgr.Start("alpha"); err != nil {
+		t.Fatal(err)
+	}
+	pid := mgr.Status().PID
+
+	// A generation that outlives the idle timeout by itself.
+	done := make(chan int, 1)
+	go func() {
+		resp, err := http.Get(srv.URL + "/v1/hang?model=alpha&ms=1500")
+		if err != nil {
+			done <- 0
+			return
+		}
+		io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
+		done <- resp.StatusCode
+	}()
+
+	// Wait until the proxy really has the request in flight.
+	for deadline := time.Now().Add(5 * time.Second); ; {
+		mgr.mu.RLock()
+		n := mgr.inflight
+		mgr.mu.RUnlock()
+		if n > 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the request never reached the proxy")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	ageLastUsed(t, mgr, time.Hour)
+	if mgr.CheckInactivity() {
+		t.Fatal("an engine with a request in flight was reaped as idle")
+	}
+
+	if code := <-done; code != 200 {
+		t.Fatalf("the slow request did not survive: status %d", code)
+	}
+	assertProcessAlive(t, pid)
+
+	// Finishing the request refreshed the idle clock.
+	if mgr.CheckInactivity() {
+		t.Fatal("the completed request did not reset the idle clock")
+	}
+}
+
+func assertProcessAlive(t *testing.T, pid int) {
+	t.Helper()
+	if err := syscall.Kill(pid, 0); err != nil {
+		t.Fatalf("process %d is gone: %v", pid, err)
 	}
 }
 

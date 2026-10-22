@@ -14,14 +14,15 @@ import (
 
 // Defaults used when the configuration file omits a value.
 const (
-	DefaultMonitorPort    = 8061
-	DefaultRouterPort     = 8078
-	DefaultHost           = "127.0.0.1"
-	DefaultStartupTimeout = 180
-	DefaultStopTimeout    = 20
-	DefaultMonitorPoll    = 5
-	DefaultPortFlag       = "--port"
-	DefaultLogLines       = 4000
+	DefaultMonitorPort         = 8061
+	DefaultRouterPort          = 8078
+	DefaultHost                = "127.0.0.1"
+	DefaultStartupTimeout      = 180
+	DefaultGracefulStopTimeout = 20
+	DefaultInactiveStopTimeout = 600
+	DefaultMonitorPoll         = 5
+	DefaultPortFlag            = "--port"
+	DefaultLogLines            = 4000
 )
 
 // Monitoring sources understood by the router.
@@ -71,13 +72,14 @@ type Engine struct {
 
 // Config is the whole persisted state of llm-pivot.
 type Config struct {
-	MonitorPort    int       `yaml:"monitor_port" json:"monitor_port"`
-	RouterPort     int       `yaml:"router_port" json:"router_port"`
-	Host           string    `yaml:"host,omitempty" json:"host"`
-	StartupTimeout int       `yaml:"startup_timeout_seconds,omitempty" json:"startup_timeout_seconds"`
-	StopTimeout    int       `yaml:"stop_timeout_seconds,omitempty" json:"stop_timeout_seconds"`
-	LogLines       int       `yaml:"log_lines,omitempty" json:"log_lines"`
-	Engines        []*Engine `yaml:"engines" json:"engines"`
+	MonitorPort         int       `yaml:"monitor_port" json:"monitor_port"`
+	RouterPort          int       `yaml:"router_port" json:"router_port"`
+	Host                string    `yaml:"host,omitempty" json:"host"`
+	StartupTimeout      int       `yaml:"startup_timeout_seconds,omitempty" json:"startup_timeout_seconds"`
+	GracefulStopTimeout int       `yaml:"graceful_stop_timeout_seconds,omitempty" json:"graceful_stop_timeout_seconds"`
+	InactiveStopTimeout int       `yaml:"inactive_stop_timeout_seconds,omitempty" json:"inactive_stop_timeout_seconds"`
+	LogLines            int       `yaml:"log_lines,omitempty" json:"log_lines"`
+	Engines             []*Engine `yaml:"engines" json:"engines"`
 
 	path string `yaml:"-" json:"-"`
 }
@@ -86,13 +88,14 @@ type Config struct {
 // configuration without racing the running router.
 func (c *Config) Clone() *Config {
 	out := &Config{
-		MonitorPort:    c.MonitorPort,
-		RouterPort:     c.RouterPort,
-		Host:           c.Host,
-		StartupTimeout: c.StartupTimeout,
-		StopTimeout:    c.StopTimeout,
-		LogLines:       c.LogLines,
-		path:           c.path,
+		MonitorPort:         c.MonitorPort,
+		RouterPort:          c.RouterPort,
+		Host:                c.Host,
+		StartupTimeout:      c.StartupTimeout,
+		GracefulStopTimeout: c.GracefulStopTimeout,
+		InactiveStopTimeout: c.InactiveStopTimeout,
+		LogLines:            c.LogLines,
+		path:                c.path,
 	}
 	for _, e := range c.Engines {
 		ne := *e
@@ -178,8 +181,12 @@ func (c *Config) normalize() {
 	if c.StartupTimeout <= 0 {
 		c.StartupTimeout = DefaultStartupTimeout
 	}
-	if c.StopTimeout <= 0 {
-		c.StopTimeout = DefaultStopTimeout
+	if c.GracefulStopTimeout <= 0 {
+		c.GracefulStopTimeout = DefaultGracefulStopTimeout
+	}
+	// A negative value is kept: it means "never stop an idle engine".
+	if c.InactiveStopTimeout == 0 {
+		c.InactiveStopTimeout = DefaultInactiveStopTimeout
 	}
 	if c.LogLines <= 0 {
 		c.LogLines = DefaultLogLines
@@ -373,10 +380,12 @@ monitor_port: 8061
 router_port: 8078
 host: 127.0.0.1
 
-# How long to wait for a freshly started engine to answer, and how long to
-# wait for a stopping engine to exit before it is killed.
+# How long to wait for a freshly started engine to answer, how long to
+# wait for a stopping engine to exit gracefully before killing it, and how long
+# an engine may idle before being stopped automatically.
 startup_timeout_seconds: 180
-stop_timeout_seconds: 20
+graceful_stop_timeout_seconds: 20
+inactive_stop_timeout_seconds: 600
 
 engines:
   - name: llama.cpp

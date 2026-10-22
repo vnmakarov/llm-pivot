@@ -30,13 +30,14 @@ const engineHost = "127.0.0.1"
 
 // instance is one running engine process serving one model.
 type instance struct {
-	engine  string
-	model   string
-	port    int
-	argv    []string
-	cmd     *exec.Cmd
-	pid     int
-	started time.Time
+	engine   string
+	model    string
+	port     int
+	argv     []string
+	cmd      *exec.Cmd
+	pid      int
+	started  time.Time
+	lastUsed time.Time // last time the model was used by a request
 
 	monitorURL string // resolved {{port}} etc, for http polling or framing
 
@@ -90,12 +91,13 @@ type Status struct {
 type Manager struct {
 	opMu sync.Mutex // serialises whole start/stop sequences
 
-	mu      sync.RWMutex
-	cfg     *Config
-	inst    *instance
-	state   string
-	lastErr string
-	snap    *MonitorSnapshot
+	mu       sync.RWMutex
+	cfg      *Config
+	inst     *instance
+	state    string
+	lastErr  string
+	snap     *MonitorSnapshot
+	inflight int // requests being proxied right now
 
 	log    *LogBuffer
 	client *http.Client
@@ -156,6 +158,56 @@ func (m *Manager) RunningTarget() (engine, model string, port int, ready bool) {
 		return "", "", 0, false
 	}
 	return m.inst.engine, m.inst.model, m.inst.port, m.inst.healthy
+}
+
+// MarkUsed records that a request is being forwarded to the running engine and
+// returns the function that releases it. Generation can take minutes, so the
+// engine counts as busy for the whole request, not just at its start.
+func (m *Manager) MarkUsed() (release func()) {
+	touch := func(delta int) {
+		m.mu.Lock()
+		m.inflight += delta
+		if m.inst != nil {
+			m.inst.lastUsed = time.Now()
+		}
+		m.mu.Unlock()
+	}
+	touch(1)
+	return func() { touch(-1) }
+}
+
+// CheckInactivity stops the running engine when no request has been forwarded
+// to it for longer than inactive_stop_timeout_seconds. A negative timeout
+// disables it. Returns true if an engine was stopped.
+func (m *Manager) CheckInactivity() bool {
+	// idle reports the instance and how long it has been unused, or nil when
+	// nothing is eligible to be reaped.
+	idle := func() (*instance, time.Duration, time.Duration) {
+		m.mu.RLock()
+		defer m.mu.RUnlock()
+		secs := m.cfg.InactiveStopTimeout
+		in := m.inst
+		if in == nil || !in.alive() || secs < 0 || m.inflight > 0 {
+			return nil, 0, 0
+		}
+		return in, time.Since(in.lastUsed), time.Duration(secs) * time.Second
+	}
+
+	in, since, limit := idle()
+	if in == nil || since <= limit {
+		return false
+	}
+
+	m.opMu.Lock()
+	defer m.opMu.Unlock()
+	// A start may have replaced the instance while we waited for opMu.
+	again, since, limit := idle()
+	if again != in || since <= limit {
+		return false
+	}
+	m.stopLocked(fmt.Sprintf("idle for %s with no requests (inactive stop timeout is %s)",
+		since.Round(time.Second), limit))
+	return true
 }
 
 // ---------------------------------------------------------------- lifecycle
@@ -296,14 +348,15 @@ func (m *Manager) startLocked(model string) error {
 	errW.Close()
 
 	in := &instance{
-		engine:  eng.Name,
-		model:   mdl.Name,
-		port:    eng.Port,
-		argv:    argv,
-		cmd:     cmd,
-		pid:     cmd.Process.Pid,
-		started: time.Now(),
-		done:    make(chan struct{}),
+		engine:   eng.Name,
+		model:    mdl.Name,
+		port:     eng.Port,
+		argv:     argv,
+		cmd:      cmd,
+		pid:      cmd.Process.Pid,
+		started:  time.Now(),
+		lastUsed: time.Now(),
+		done:     make(chan struct{}),
 	}
 	if eng.NeedsMonitorURL() {
 		in.monitorURL = expandVars(eng.MonitorURL, eng, mdl, host)
@@ -397,7 +450,7 @@ func (m *Manager) stopLocked(reason string) {
 	}
 	in.stopping = true
 	m.state = StateStopping
-	stopTimeout := time.Duration(m.cfg.StopTimeout) * time.Second
+	gracefulTimeout := time.Duration(m.cfg.GracefulStopTimeout) * time.Second
 	m.mu.Unlock()
 
 	if in.alive() {
@@ -406,9 +459,9 @@ func (m *Manager) stopLocked(reason string) {
 		signalGroup(in.pid, syscall.SIGTERM)
 		select {
 		case <-in.done:
-		case <-time.After(stopTimeout):
+		case <-time.After(gracefulTimeout):
 			m.log.System(fmt.Sprintf("engine %q did not exit within %s, killing it",
-				in.engine, stopTimeout))
+				in.engine, gracefulTimeout))
 			signalGroup(in.pid, syscall.SIGKILL)
 			select {
 			case <-in.done:

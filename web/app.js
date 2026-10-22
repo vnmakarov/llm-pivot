@@ -290,13 +290,19 @@ function renderSettings() {
         <input type="number" id="f-startup" min="1" value="${esc(c.startup_timeout_seconds)}">
       </div>
       <div class="field">
-        <label>Stop timeout <span class="hint">s</span></label>
-        <input type="number" id="f-stop" min="1" value="${esc(c.stop_timeout_seconds)}">
+        <label>Graceful stop timeout <span class="hint">s (killed afterwards)</span></label>
+        <input type="number" id="f-stop" min="1" value="${esc(c.graceful_stop_timeout_seconds)}">
       </div>
     </div>
-    <div class="field" style="max-width:220px">
-      <label>Log buffer <span class="hint">lines kept</span></label>
-      <input type="number" id="f-loglines" min="100" value="${esc(c.log_lines)}">
+    <div class="grid2">
+      <div class="field">
+        <label>Inactive stop timeout <span class="hint">s — -1 never stops</span></label>
+        <input type="number" id="f-inactive" min="-1" value="${esc(c.inactive_stop_timeout_seconds)}">
+      </div>
+      <div class="field">
+        <label>Log buffer <span class="hint">lines kept</span></label>
+        <input type="number" id="f-loglines" min="100" value="${esc(c.log_lines)}">
+      </div>
     </div>
     <div class="actions">
       <button class="btn primary" id="btn-save-settings">Save settings</button>
@@ -312,7 +318,8 @@ function renderSettings() {
       router_port: num('f-router-port'),
       host: $('f-host').value.trim() || '127.0.0.1',
       startup_timeout_seconds: num('f-startup'),
-      stop_timeout_seconds: num('f-stop'),
+      graceful_stop_timeout_seconds: num('f-stop'),
+      inactive_stop_timeout_seconds: num('f-inactive'),
       log_lines: num('f-loglines'),
     };
     const oldMonitor = S.cfg.monitor_port;
@@ -568,7 +575,7 @@ function refreshModelControls() {
     } else {
       h += `<button class="btn green" id="m-start"${busy ? ' disabled' : ''}>Start</button>`;
     }
-    h += `<button class="btn" id="m-copy">Copy</button>`;
+    h += `<button class="btn" id="m-copy">Copy model</button>`;
     h += `<div class="spacer"></div><button class="btn danger" id="m-delete">Delete model</button>`;
   }
   box.innerHTML = h;

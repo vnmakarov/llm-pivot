@@ -128,12 +128,13 @@ func (m *Manager) Reload() (*EditResult, error) {
 
 // SettingsInput is the payload of the global settings form.
 type SettingsInput struct {
-	MonitorPort    int    `json:"monitor_port"`
-	RouterPort     int    `json:"router_port"`
-	Host           string `json:"host"`
-	StartupTimeout int    `json:"startup_timeout_seconds"`
-	StopTimeout    int    `json:"stop_timeout_seconds"`
-	LogLines       int    `json:"log_lines"`
+	MonitorPort         int    `json:"monitor_port"`
+	RouterPort          int    `json:"router_port"`
+	Host                string `json:"host"`
+	StartupTimeout      int    `json:"startup_timeout_seconds"`
+	GracefulStopTimeout int    `json:"graceful_stop_timeout_seconds"`
+	InactiveStopTimeout int    `json:"inactive_stop_timeout_seconds"`
+	LogLines            int    `json:"log_lines"`
 }
 
 // UpdateSettings changes the global options, including the two ports.
@@ -146,7 +147,8 @@ func (m *Manager) UpdateSettings(in SettingsInput) (*EditResult, error) {
 		c.RouterPort = in.RouterPort
 		c.Host = in.Host
 		c.StartupTimeout = in.StartupTimeout
-		c.StopTimeout = in.StopTimeout
+		c.GracefulStopTimeout = in.GracefulStopTimeout
+		c.InactiveStopTimeout = in.InactiveStopTimeout
 		if in.LogLines > 0 {
 			c.LogLines = in.LogLines
 		}

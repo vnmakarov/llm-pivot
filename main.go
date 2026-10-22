@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"syscall"
+	"time"
 )
 
 // Version is reported on the monitor page and by -version.
@@ -122,26 +123,37 @@ func main() {
 
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
-	for s := range sig {
-		if s != syscall.SIGHUP {
-			log.Printf("received %s, shutting down", s)
-			break
-		}
-		// systemctl --user reload llm-pivot
-		res, err := mgr.Reload()
-		if err != nil {
-			log.Printf("reload refused: %v", err)
-			mgr.Log().System("✗ reload refused, keeping the previous configuration: " + err.Error())
-			continue
-		}
-		log.Printf("configuration reloaded from %s", mgr.Config().Path())
-		mgr.Log().System("configuration reloaded from " + mgr.Config().Path())
-		for _, n := range res.Notes {
-			mgr.Log().System(n)
-		}
-		if res.PortsMoved {
-			c := mgr.Config()
-			rebind(c.Host, c.MonitorPort, c.RouterPort)
+	// The sweep granularity is added to inactive_stop_timeout_seconds, so an
+	// idle engine is stopped somewhere within this long of its deadline.
+	idleSweep := time.NewTicker(30 * time.Second)
+	defer idleSweep.Stop()
+
+signals:
+	for {
+		select {
+		case s := <-sig:
+			if s != syscall.SIGHUP {
+				log.Printf("received %s, shutting down", s)
+				break signals
+			}
+			// systemctl --user reload llm-pivot
+			res, err := mgr.Reload()
+			if err != nil {
+				log.Printf("reload refused: %v", err)
+				mgr.Log().System("✗ reload refused, keeping the previous configuration: " + err.Error())
+				continue
+			}
+			log.Printf("configuration reloaded from %s", mgr.Config().Path())
+			mgr.Log().System("configuration reloaded from " + mgr.Config().Path())
+			for _, n := range res.Notes {
+				mgr.Log().System(n)
+			}
+			if res.PortsMoved {
+				c := mgr.Config()
+				rebind(c.Host, c.MonitorPort, c.RouterPort)
+			}
+		case <-idleSweep.C:
+			mgr.CheckInactivity()
 		}
 	}
 
