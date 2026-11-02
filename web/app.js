@@ -323,16 +323,21 @@ function renderSettings() {
       log_lines: num('f-loglines'),
     };
     const oldMonitor = S.cfg.monitor_port;
+    const oldHost = S.cfg.host;
     try {
       const res = await api('PUT', '/api/settings', body);
       (res.notes || []).forEach((n) => toast(n));
       toast('Settings saved', 'ok');
       S.banner = null;
-      if (res.monitor_port !== oldMonitor) {
+      // The host may have moved too; 0.0.0.0 still serves the hostname
+      // this page was opened on, so keep it for that case.
+      const hostMoved = body.host && body.host !== oldHost && body.host !== '0.0.0.0';
+      if (res.monitor_port !== oldMonitor || hostMoved) {
         toast('Moving this page to port ' + res.monitor_port + '…');
-        setTimeout(() => {
-          location.port = res.monitor_port;
-        }, 1200);
+        const host = hostMoved ? body.host : location.hostname;
+        const url = location.protocol + '//' + host + ':' + res.monitor_port
+          + location.pathname + location.hash;
+        setTimeout(() => moveTo(url), 1200);
       }
       await poll();
       renderDetail(true);
@@ -346,6 +351,26 @@ function renderSettings() {
 function num(id) {
   const v = parseInt($(id).value, 10);
   return isNaN(v) ? 0 : v;
+}
+
+/* Moving the monitor port means moving this page. Assigning location.port
+   alone never navigates (only href/assign do), and the old address stops
+   serving once the rebind lands — so build a full URL, wait for the
+   rebind, then probe the new address before navigating. If it never
+   answers, the rebind failed (the port was taken): stay put and say so. */
+async function moveTo(url) {
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  await wait(1200);
+  for (let i = 0; i < 6; i++) {
+    try {
+      await fetch(url, { mode: 'no-cors' }); // opaque reply: bound, or network error
+      location.href = url;
+      return;
+    } catch (e) {
+      await wait(1000);
+    }
+  }
+  toast('the new monitor address never answered; this page stays on the old one', 'error');
 }
 
 /* ----------------------------------------------------------------- engine */
