@@ -269,24 +269,46 @@ func (m *Manager) Stop() error {
 }
 
 // EnsureModel is the entry point used by the router: it is a no-op when the
-// requested model is already being served, and otherwise swaps engines.
-func (m *Manager) EnsureModel(model string) error {
-	m.mu.RLock()
-	ok := m.inst != nil && m.inst.model == model && m.inst.healthy && m.inst.alive()
-	m.mu.RUnlock()
-	if ok {
-		return nil
+// requested model is already being served, and otherwise swaps engines. It
+// reports the engine and port serving model.
+//
+// Returning the target is the whole point of it: the caller must not go and
+// read what is running once this has returned, because by then it may be
+// something else. A request that asked for one model would be forwarded to
+// whichever model won the race, and answered by it.
+func (m *Manager) EnsureModel(model string) (engine string, port int, err error) {
+	// serving reports where model is being served, and false when it is not
+	// the running one - the only case in which anything has to be started.
+	serving := func() (string, int, bool) {
+		m.mu.RLock()
+		defer m.mu.RUnlock()
+		in := m.inst
+		if in == nil || in.model != model || !in.healthy || !in.alive() {
+			return "", 0, false
+		}
+		return in.engine, in.port, true
+	}
+
+	if eng, p, ok := serving(); ok {
+		return eng, p, nil
 	}
 	m.opMu.Lock()
 	defer m.opMu.Unlock()
 	// Re-check: another request may have started it while we waited.
-	m.mu.RLock()
-	ok = m.inst != nil && m.inst.model == model && m.inst.healthy && m.inst.alive()
-	m.mu.RUnlock()
-	if ok {
-		return nil
+	if eng, p, ok := serving(); ok {
+		return eng, p, nil
 	}
-	return m.startLocked(model)
+	if err := m.startLocked(model); err != nil {
+		return "", 0, err
+	}
+	// Still under opMu, so this is the engine startLocked has just brought
+	// up rather than whatever a later request may replace it with. It can
+	// still have died in between, which only the reaper needs to know.
+	eng, p, ok := serving()
+	if !ok {
+		return "", 0, fmt.Errorf("engine for model %q stopped before it could be used", model)
+	}
+	return eng, p, nil
 }
 
 // startLocked must be called with opMu held.

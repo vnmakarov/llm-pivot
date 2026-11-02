@@ -1356,3 +1356,142 @@ func TestStartingNamesTheModelBeforeItHasAProcess(t *testing.T) {
 		t.Errorf("a running engine is still reported as starting: %+v", st)
 	}
 }
+
+// ------------------------------------------------- routing the right model
+
+// twoEngineManager gives each model its own engine on its own port, so that
+// switching models really does move the traffic to a different listener.
+// With one shared engine a misrouted request would land on the right port by
+// accident and prove nothing.
+func twoEngineManager(t *testing.T) *Manager {
+	t.Helper()
+	var engines []*Engine
+	for _, name := range []string{"alpha", "beta"} {
+		engines = append(engines, &Engine{
+			Name:       "eng-" + name,
+			Port:       freePort(t),
+			Command:    fakeEngineCommand(),
+			Monitor:    MonitorStdio,
+			HealthPath: "/health",
+			PortFlag:   "--port",
+			Env:        []string{"ER_FAKE_ENGINE=1"},
+			Models:     []*Model{{Name: name}},
+		})
+	}
+	cfg := &Config{
+		MonitorPort: freePort(t),
+		RouterPort:  freePort(t),
+		Engines:     engines,
+		path:        filepath.Join(t.TempDir(), "config.yaml"),
+	}
+	cfg.normalize()
+	if err := cfg.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	mgr := NewManager(cfg)
+	t.Cleanup(mgr.Shutdown)
+	return mgr
+}
+
+// EnsureModel has to report the engine it established. The router used to
+// ask separately what was running once it returned, which is a different
+// question: by then another request may have swapped the engine, and the
+// answer would name a model nobody here asked for.
+func TestEnsureModelReportsWhereTheModelRuns(t *testing.T) {
+	mgr := twoEngineManager(t)
+	portOf := func(engine string) int { return mgr.Config().Engine(engine).Port }
+
+	eng, port, err := mgr.EnsureModel("alpha")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if eng != "eng-alpha" || port != portOf("eng-alpha") {
+		t.Fatalf("alpha was started on %s:%d, want eng-alpha:%d", eng, port, portOf("eng-alpha"))
+	}
+	pid := mgr.Status().PID
+
+	// The already-running path must answer the same, without a restart.
+	eng, port, err = mgr.EnsureModel("alpha")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if eng != "eng-alpha" || port != portOf("eng-alpha") {
+		t.Errorf("a running model was reported as %s:%d", eng, port)
+	}
+	if mgr.Status().PID != pid {
+		t.Error("the engine was restarted although it was already serving the model")
+	}
+
+	// Switching must report the engine it switched to, not the one it left.
+	eng, port, err = mgr.EnsureModel("beta")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if eng != "eng-beta" || port != portOf("eng-beta") {
+		t.Errorf("beta was reported as %s:%d, want eng-beta:%d", eng, port, portOf("eng-beta"))
+	}
+}
+
+// Two clients asking for different models at once make the engines swap
+// under each other's feet. Whatever that costs - a 502 when the engine is
+// killed mid-request, a 503 while one is coming up - a request that gets an
+// answer at all must have been answered by the model it asked for.
+func TestRouterNeverAnswersWithTheWrongModel(t *testing.T) {
+	mgr := twoEngineManager(t)
+	srv := httptest.NewServer(NewRouter(mgr))
+	defer srv.Close()
+
+	// servedBy returns the engine's --tag, i.e. the model it was started
+	// for, or "" for any reply that did not come from an engine.
+	servedBy := func(model string) string {
+		resp, err := http.Post(srv.URL+"/v1/chat/completions", "application/json",
+			strings.NewReader(fmt.Sprintf(`{"model":%q}`, model)))
+		if err != nil {
+			return ""
+		}
+		defer resp.Body.Close()
+		raw, _ := io.ReadAll(resp.Body)
+		if resp.StatusCode != http.StatusOK {
+			return ""
+		}
+		var out struct {
+			ServedBy string `json:"served_by"`
+		}
+		if err := json.Unmarshal(raw, &out); err != nil {
+			t.Errorf("bad JSON from the router: %q", raw)
+			return ""
+		}
+		return out.ServedBy
+	}
+
+	var mu sync.Mutex
+	answered := 0
+	var wrong []string
+	var wg sync.WaitGroup
+	for round := 0; round < 8; round++ {
+		for _, want := range []string{"alpha", "beta"} {
+			wg.Add(1)
+			go func(want string) {
+				defer wg.Done()
+				got := servedBy(want)
+				mu.Lock()
+				defer mu.Unlock()
+				if got == "" {
+					return // the engine was swapped away; loud, not wrong
+				}
+				answered++
+				if got != want {
+					wrong = append(wrong, fmt.Sprintf("asked %s, answered by %s", want, got))
+				}
+			}(want)
+		}
+		wg.Wait()
+	}
+	if len(wrong) > 0 {
+		t.Errorf("%d of %d answers came from the wrong model: %v", len(wrong), answered, wrong)
+	}
+	if answered == 0 {
+		t.Fatal("no request was answered at all, so nothing was checked")
+	}
+	t.Logf("%d requests answered, all by the model they asked for", answered)
+}

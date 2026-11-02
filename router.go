@@ -180,14 +180,18 @@ func (rt *Router) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				"model_not_found")
 			return
 		}
-		// This kills the engine currently serving another model.
-		if err := rt.mgr.EnsureModel(wanted); err != nil {
+		// This kills the engine currently serving another model. The target
+		// comes back from the same call: asking afterwards what is running
+		// would be a different question, and a concurrent request for
+		// another model can already have changed the answer.
+		engine, port, err := rt.mgr.EnsureModel(wanted)
+		if err != nil {
 			writeOpenAIError(w, http.StatusServiceUnavailable,
 				"could not start model "+strconv.Quote(wanted)+": "+err.Error(),
 				"engine_start_failed")
 			return
 		}
-		target.engine, target.model, target.port, _ = rt.mgr.RunningTarget()
+		target = routeTarget{engine: engine, model: wanted, port: port}
 	} else {
 		var ready bool
 		target.engine, target.model, target.port, ready = rt.mgr.RunningTarget()
