@@ -2,7 +2,11 @@ package main
 
 import (
 	"fmt"
+	"io"
+	"os"
+	"strings"
 	"testing"
+	"time"
 )
 
 // fill pushes n numbered lines and returns the buffer.
@@ -92,5 +96,131 @@ func TestLogBufferSetMaxZeroFallsBackToTheDefault(t *testing.T) {
 	fill(b, DefaultLogLines+50)
 	if got := count(b); got != DefaultLogLines {
 		t.Errorf("kept %d lines, want the default %d", got, DefaultLogLines)
+	}
+}
+
+// ------------------------------------------------------------- pump
+
+// pumpInto runs the pump over what write produces and returns the lines it
+// captured, plus any error the writing side hit. A writer that gets EPIPE is
+// the symptom that matters: it means the pump stopped reading.
+func pumpInto(t *testing.T, max int, write func(w io.Writer) error) ([]LogLine, error) {
+	t.Helper()
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := NewLogBuffer(max)
+	done := make(chan struct{})
+	go func() { b.pump(StreamStdout, r); close(done) }()
+
+	werr := write(w)
+	w.Close()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the pump did not finish")
+	}
+	lines, _, _ := b.Since(0)
+	return lines, werr
+}
+
+func TestPumpKeepsReadingPastAnEnormousLine(t *testing.T) {
+	lines, werr := pumpInto(t, 100, func(w io.Writer) error {
+		if _, err := io.WriteString(w, "before\n"); err != nil {
+			return err
+		}
+		// One line of about 2 MB, as \r progress output accumulates.
+		if _, err := io.WriteString(w, strings.Repeat("progress\r", 250000)+"\n"); err != nil {
+			return err
+		}
+		_, err := io.WriteString(w, "after\n")
+		return err
+	})
+	// The write side failing at all means the pump closed the pipe early,
+	// which is what killed the engine with SIGPIPE.
+	if werr != nil {
+		t.Fatalf("the engine's writes failed: %v", werr)
+	}
+	if len(lines) != 3 {
+		t.Fatalf("captured %d lines, want 3", len(lines))
+	}
+	if lines[0].Text != "before" || lines[2].Text != "after" {
+		t.Errorf("the lines around the huge one were lost: %q / %q", lines[0].Text, lines[2].Text)
+	}
+	if !strings.Contains(lines[1].Text, "[cut:") {
+		t.Error("the huge line was not marked as cut")
+	}
+	if len(lines[1].Text) > maxLogLine+200 {
+		t.Errorf("the cut line is %d bytes, which is not cut", len(lines[1].Text))
+	}
+}
+
+// A line that exactly fills the cap is not over it, so it must be stored
+// whole and not be marked.
+func TestPumpKeepsALineExactlyAtTheCap(t *testing.T) {
+	lines, werr := pumpInto(t, 10, func(w io.Writer) error {
+		_, err := io.WriteString(w, strings.Repeat("x", maxLogLine)+"\n")
+		return err
+	})
+	if werr != nil {
+		t.Fatal(werr)
+	}
+	if len(lines) != 1 {
+		t.Fatalf("captured %d lines, want 1", len(lines))
+	}
+	if len(lines[0].Text) != maxLogLine || strings.Contains(lines[0].Text, "[cut:") {
+		t.Errorf("a line of exactly %d bytes was cut: len %d", maxLogLine, len(lines[0].Text))
+	}
+}
+
+// Ordinary output has to come through exactly as before: line endings
+// stripped, blank lines kept, a last line without a newline still captured.
+func TestPumpOrdinaryOutput(t *testing.T) {
+	lines, werr := pumpInto(t, 100, func(w io.Writer) error {
+		_, err := io.WriteString(w, "one\ntwo\r\n\nthree without a newline")
+		return err
+	})
+	if werr != nil {
+		t.Fatal(werr)
+	}
+	var got []string
+	for _, l := range lines {
+		got = append(got, l.Text)
+	}
+	want := []string{"one", "two", "", "three without a newline"}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+// Several long lines in a row must not make the pump hold on to one buffer
+// per line, and each must still be cut independently.
+func TestPumpRecoversBetweenLongLines(t *testing.T) {
+	lines, werr := pumpInto(t, 100, func(w io.Writer) error {
+		for i := 0; i < 3; i++ {
+			if _, err := io.WriteString(w, strings.Repeat("y", maxLogLine+500)+"\n"); err != nil {
+				return err
+			}
+			if _, err := io.WriteString(w, "short\n"); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if werr != nil {
+		t.Fatal(werr)
+	}
+	if len(lines) != 6 {
+		t.Fatalf("captured %d lines, want 6", len(lines))
+	}
+	for i, l := range lines {
+		if i%2 == 0 {
+			if !strings.Contains(l.Text, "[cut:") {
+				t.Errorf("line %d should have been cut", i)
+			}
+		} else if l.Text != "short" {
+			t.Errorf("line %d = %q, want \"short\"", i, l.Text)
+		}
 	}
 }

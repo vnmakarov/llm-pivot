@@ -45,6 +45,16 @@ func TestHelperEngine(t *testing.T) {
 	fmt.Fprintf(os.Stdout, "fake engine stdout: serving %s\n", tag)
 	fmt.Fprintf(os.Stderr, "fake engine stderr: listening on port %s\n", port)
 
+	// ER_FAKE_HUGE_LINE prints one line far longer than the log buffer will
+	// store, the way \r progress output accumulates with no newline in it.
+	// The engine goes on writing afterwards: llm-pivot must still be reading,
+	// or these writes die of SIGPIPE.
+	if n, _ := strconv.Atoi(os.Getenv("ER_FAKE_HUGE_LINE")); n > 0 {
+		fmt.Fprint(os.Stdout, strings.Repeat("progress\r", n))
+		fmt.Fprintln(os.Stdout)
+		fmt.Fprintln(os.Stdout, "fake engine stdout: still alive after the huge line")
+	}
+
 	delay, _ := strconv.Atoi(os.Getenv("ER_FAKE_DELAY_MS"))
 	time.Sleep(time.Duration(delay) * time.Millisecond)
 
@@ -1249,4 +1259,47 @@ func TestReloadResizesTheLogBuffer(t *testing.T) {
 	if lines, _, _ := mgr.Log().Since(0); len(lines) != 120 {
 		t.Errorf("after the reload the buffer holds %d lines, want 120", len(lines))
 	}
+}
+
+// An engine that prints one enormous line used to kill itself on llm-pivot's
+// behalf: the log scanner gave up on the line, the pump returned, its pipe
+// was closed, and the engine's next write died of SIGPIPE - reported as the
+// engine having exited during startup, with nothing pointing at the real
+// cause. The engine must survive, and its later output must still arrive.
+func TestEngineSurvivesAnEnormousLogLine(t *testing.T) {
+	mgr := testManager(t, []*Model{{Name: "alpha"}}, func(e *Engine) {
+		// 250k × len("progress\r") ≈ 2.25 MB with no newline in it.
+		e.Env = append(e.Env, "ER_FAKE_HUGE_LINE=250000")
+	})
+	if err := mgr.Start("alpha"); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		if logHas(mgr, "still alive after the huge line") {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("output after the huge line never arrived; state=%+v", mgr.Status())
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if st := mgr.Status(); st.State != StateRunning {
+		t.Errorf("the engine did not survive its own output: %+v", st)
+	}
+	if !logHas(mgr, "[cut:") {
+		t.Error("the line was cut but the log does not say so")
+	}
+}
+
+// logHas reports whether any buffered line contains want.
+func logHas(mgr *Manager, want string) bool {
+	lines, _, _ := mgr.Log().Since(0)
+	for _, l := range lines {
+		if strings.Contains(l.Text, want) {
+			return true
+		}
+	}
+	return false
 }

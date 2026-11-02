@@ -2,10 +2,21 @@ package main
 
 import (
 	"bufio"
+	"bytes"
+	"errors"
+	"fmt"
 	"io"
 	"strings"
 	"sync"
 	"time"
+)
+
+const (
+	// logReadChunk is how much of the engine's output is read at a time.
+	logReadChunk = 64 * 1024
+	// maxLogLine caps one stored line. A longer one is cut rather than
+	// dropped, and never stops the line after it from being read.
+	maxLogLine = 1 << 20
 )
 
 // Stream tags tell the monitor page where a line came from.
@@ -108,11 +119,65 @@ func (b *LogBuffer) Clear() {
 }
 
 // pump copies a process pipe into the buffer line by line.
+//
+// It has to drain the pipe until EOF whatever the engine writes down it. A
+// pump that stops reading early makes the engine's next write fail with
+// EPIPE, and the SIGPIPE that comes with it kills the very process llm-pivot
+// is supposed to be running - reported, confusingly, as the engine having
+// exited by itself. So an unreadably long line is cut and marked rather than
+// allowed to end the loop, and a read error is logged rather than swallowed.
 func (b *LogBuffer) pump(stream string, r io.ReadCloser) {
 	defer r.Close()
-	sc := bufio.NewScanner(r)
-	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-	for sc.Scan() {
-		b.Append(stream, sc.Text())
+	br := bufio.NewReaderSize(r, logReadChunk)
+	var (
+		cur []byte // the line being assembled
+		cut bool   // it passed maxLogLine; the rest of it is dropped
+	)
+	for {
+		// chunk points into br's own buffer and stays valid only until the
+		// next read, so whatever is kept has to be copied out of it.
+		chunk, err := br.ReadSlice('\n')
+		whole := err == nil
+		if whole {
+			chunk = bytes.TrimRight(chunk, "\r\n")
+		}
+		if !cut {
+			if room := maxLogLine - len(cur); len(chunk) > room {
+				cur, cut = append(cur, chunk[:room]...), true
+			} else {
+				cur = append(cur, chunk...)
+			}
+		}
+
+		switch {
+		case whole:
+			b.Append(stream, lineText(cur, cut))
+			if cap(cur) > logReadChunk {
+				cur = nil // hand the outsized array back
+			} else {
+				cur = cur[:0]
+			}
+			cut = false
+		case errors.Is(err, bufio.ErrBufferFull):
+			// Only part of the line so far; the rest is still coming.
+		default:
+			// EOF or a broken pipe: whatever is held is the final line.
+			if len(cur) > 0 {
+				b.Append(stream, lineText(cur, cut))
+			}
+			if !errors.Is(err, io.EOF) {
+				b.System(fmt.Sprintf("✗ cannot read the engine's %s: %v", stream, err))
+			}
+			return
+		}
 	}
+}
+
+// lineText renders one captured line, saying so when it was cut short.
+func lineText(line []byte, cut bool) string {
+	s := strings.TrimRight(string(line), "\r\n")
+	if cut {
+		s += fmt.Sprintf(" … [cut: this line is longer than %d bytes]", maxLogLine)
+	}
+	return s
 }
