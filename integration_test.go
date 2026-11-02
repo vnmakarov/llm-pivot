@@ -1495,3 +1495,162 @@ func TestRouterNeverAnswersWithTheWrongModel(t *testing.T) {
 	}
 	t.Logf("%d requests answered, all by the model they asked for", answered)
 }
+
+// ------------------------------------------------------- throttle bound
+
+// Sweeping stale entries does not bound the throttle on its own: a client
+// walking a namespace of bad paths invents keys faster than they go stale,
+// and every one of them used to be remembered for ever.
+func TestLogThrottleIsBounded(t *testing.T) {
+	th := newLogThrottle()
+	for i := 0; i < 10000; i++ {
+		// A fresh key every time, all well inside the suppression window.
+		th.allow(fmt.Sprintf("404 GET /v1/%d", i), time.Hour)
+	}
+	th.mu.Lock()
+	n := len(th.seen)
+	th.mu.Unlock()
+	if n > maxThrottleKeys {
+		t.Errorf("the throttle remembers %d keys, which is past its %d bound", n, maxThrottleKeys)
+	}
+}
+
+// Bounding it must not break what it is for: a repeated message is still
+// suppressed for the window, and a stale one is allowed through again.
+func TestLogThrottleStillSuppresses(t *testing.T) {
+	th := newLogThrottle()
+	if !th.allow("same", time.Hour) {
+		t.Fatal("the first message was suppressed")
+	}
+	if th.allow("same", time.Hour) {
+		t.Error("a repeat within the window was not suppressed")
+	}
+	if !th.allow("same", 0) {
+		t.Error("a message past its window was not let through")
+	}
+	// A key evicted to stay inside the bound simply speaks up again.
+	for i := 0; i < 4*maxThrottleKeys; i++ {
+		th.allow(fmt.Sprintf("key %d", i), time.Hour)
+	}
+	if !th.allow("same", time.Hour) {
+		t.Error("an evicted key stayed suppressed")
+	}
+}
+
+// ------------------------------------------------- monitor body on demand
+
+// The sampled body of an http-monitored engine is up to 512 KB and only the
+// engine tab displays it, so /api/state leaves it out unless it is asked
+// for. The rest of the sample has to travel either way.
+func TestStateOmitsTheMonitorBodyUnlessAsked(t *testing.T) {
+	mgr := testManager(t, []*Model{{Name: "alpha"}}, func(e *Engine) {
+		e.Monitor = MonitorHTTP
+		e.MonitorURL = "http://127.0.0.1:{{port}}/metrics"
+		e.MonitorEvery = 1
+	})
+	if err := mgr.Start("alpha"); err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(NewAPI(mgr, func(string, int, int) {}))
+	defer srv.Close()
+
+	get := func(query string) StateResponse {
+		t.Helper()
+		resp, err := http.Get(srv.URL + "/api/state?" + query)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		var out StateResponse
+		if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+
+	deadline := time.Now().Add(10 * time.Second)
+	var full StateResponse
+	for {
+		full = get("since=0&monitor_body=1")
+		if full.Status.Monitor != nil && full.Status.Monitor.Body != "" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("no monitor sample arrived: %+v", full.Status.Monitor)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if !strings.Contains(full.Status.Monitor.Body, "engine_tag") {
+		t.Errorf("the body asked for is not the sample: %q", full.Status.Monitor.Body)
+	}
+
+	light := get("since=0")
+	if light.Status.Monitor == nil {
+		t.Fatal("the whole sample went missing, not just its body")
+	}
+	if light.Status.Monitor.Body != "" {
+		t.Errorf("the body travelled unasked: %q", light.Status.Monitor.Body)
+	}
+	// Everything the page needs for the header must still be there.
+	if light.Status.Monitor.URL == "" || light.Status.Monitor.Samples == 0 ||
+		light.Status.Monitor.Time == "" {
+		t.Errorf("the sample lost more than its body: %+v", light.Status.Monitor)
+	}
+	// Dropping the body must not disturb the sample the manager holds.
+	if again := get("since=0&monitor_body=1"); again.Status.Monitor.Body == "" {
+		t.Error("the stored sample lost its body")
+	}
+}
+
+// ---------------------------------------------------- the {{host}} placeholder
+
+// {{host}} used to be the configured bind address in monitor_url, env and
+// work_dir but the engine address in command, so one placeholder said two
+// different things depending on where it was written. It is the engine
+// address everywhere now, which is the only one that can be reached: an
+// engine bound to some other address is one llm-pivot cannot proxy to.
+func TestHostPlaceholderIsAlwaysTheEngineAddress(t *testing.T) {
+	mgr := testManager(t, []*Model{{Name: "alpha"}}, func(e *Engine) {
+		e.Monitor = MonitorHTTP
+		e.MonitorURL = "http://{{host}}:{{port}}/metrics"
+		e.MonitorEvery = 1
+	})
+	// Bind llm-pivot itself somewhere else entirely: it used to leak into
+	// the placeholder, and it must now make no difference at all.
+	mgr.mu.Lock()
+	mgr.cfg.Host = "0.0.0.0"
+	mgr.mu.Unlock()
+
+	if err := mgr.Start("alpha"); err != nil {
+		t.Fatal(err)
+	}
+	port := mgr.Config().Engines[0].Port
+	want := fmt.Sprintf("http://%s:%d/metrics", engineHost, port)
+	if got := mgr.Status().MonitorURL; got != want {
+		t.Errorf("monitor_url = %q, want %q", got, want)
+	}
+
+	// The proof that it is the right address: the poller reaches it.
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		snap := mgr.Status().Monitor
+		if snap != nil && snap.Status == http.StatusOK {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the monitor URL was never reachable: %+v", snap)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	// The same placeholder in a command resolves the same way.
+	eng := mgr.Config().Engines[0]
+	eng.Command = "/bin/true --host {{host}}"
+	argv, err := buildArgv(eng, &Model{Name: "alpha"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if argv[2] != engineHost {
+		t.Errorf("--host expanded to %q, want %q", argv[2], engineHost)
+	}
+}

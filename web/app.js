@@ -46,7 +46,10 @@ function toast(msg, kind) {
 
 async function poll() {
   try {
-    const d = await api('GET', '/api/state?since=' + S.logSeq);
+    // The sampled monitor body is large and only the engine tab shows it,
+    // so it is asked for only while that tab is open.
+    const wantBody = S.monitorTab === 'engine' ? '&monitor_body=1' : '';
+    const d = await api('GET', '/api/state?since=' + S.logSeq + wantBody);
     S.cfg = d.config;
     S.status = d.status;
     $('version').textContent = 'v' + d.version;
@@ -897,7 +900,13 @@ function init() {
   $('item-settings').onclick = () => select({ kind: 'settings' });
   $('btn-add-engine').onclick = () => select({ kind: 'new-engine' });
   $('btn-clear-log').onclick = async () => {
-    await api('POST', '/api/log/clear');
+    try {
+      await api('POST', '/api/log/clear');
+    } catch (e) {
+      // Without this the view silently keeps lines the server still has.
+      toast(e.message, 'error');
+      return;
+    }
     $('logview').innerHTML = '';
     S.logSeq = 0;
     poll();
@@ -906,6 +915,9 @@ function init() {
     t.onclick = () => {
       S.monitorTab = t.dataset.tab === 'log' ? 'log' : 'engine';
       renderMonitor();
+      // The monitor body is only fetched for the engine tab, so opening it
+      // has to go and get one rather than wait out the next refresh.
+      if (S.monitorTab === 'engine') poll();
     };
   }
   $('btn-reload-embed').onclick = () => {

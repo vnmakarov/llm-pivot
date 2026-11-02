@@ -140,7 +140,7 @@ func TestBuildArgvInjectsPort(t *testing.T) {
 func TestExpandVars(t *testing.T) {
 	e := &Engine{Name: "eng", Port: 8080}
 	m := &Model{Name: "mod"}
-	got := expandVars("http://127.0.0.1:{{port}}/m?e={{engine}}&m={{model}}", e, m, "")
+	got := expandVars("http://127.0.0.1:{{port}}/m?e={{engine}}&m={{model}}", e, m)
 	want := "http://127.0.0.1:8080/m?e=eng&m=mod"
 	if got != want {
 		t.Errorf("got %s, want %s", got, want)

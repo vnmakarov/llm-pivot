@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -132,6 +133,11 @@ func newLogThrottle() *logThrottle {
 	return &logThrottle{seen: map[string]time.Time{}}
 }
 
+// maxThrottleKeys bounds how many distinct messages are remembered. The
+// keys come from the request path, so a client walking a namespace of bad
+// URLs invents them as fast as it likes.
+const maxThrottleKeys = 64
+
 func (t *logThrottle) allow(key string, every time.Duration) bool {
 	now := time.Now()
 	t.mu.Lock()
@@ -139,15 +145,35 @@ func (t *logThrottle) allow(key string, every time.Duration) bool {
 	if last, ok := t.seen[key]; ok && now.Sub(last) < every {
 		return false
 	}
-	if len(t.seen) > 64 { // bounded: drop entries that cannot suppress anything
-		for k, v := range t.seen {
-			if now.Sub(v) >= every {
-				delete(t.seen, k)
-			}
-		}
+	if len(t.seen) >= maxThrottleKeys {
+		t.evictLocked(now, every)
 	}
 	t.seen[key] = now
 	return true
+}
+
+// evictLocked first drops what can no longer suppress anything. Sweeping
+// stale entries alone does not bound the map, though - nothing is stale
+// when every key arrived inside the same window - so if it is still full
+// the oldest half goes too. Letting a few old messages through again is a
+// better outcome than remembering every path a client cares to invent.
+func (t *logThrottle) evictLocked(now time.Time, every time.Duration) {
+	for k, v := range t.seen {
+		if now.Sub(v) >= every {
+			delete(t.seen, k)
+		}
+	}
+	if len(t.seen) < maxThrottleKeys {
+		return
+	}
+	keys := make([]string, 0, len(t.seen))
+	for k := range t.seen {
+		keys = append(keys, k)
+	}
+	sort.Slice(keys, func(i, j int) bool { return t.seen[keys[i]].Before(t.seen[keys[j]]) })
+	for _, k := range keys[:len(keys)-maxThrottleKeys/2] {
+		delete(t.seen, k)
+	}
 }
 
 func (rt *Router) ServeHTTP(w http.ResponseWriter, r *http.Request) {

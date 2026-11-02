@@ -248,7 +248,7 @@ engines:
 		t.Error("embed mode needs a url")
 	}
 	// The fragment must survive: it is what selects the page's own tab.
-	if got := expandVars(e.MonitorURL, e, &Model{Name: "m"}, ""); got != "http://127.0.0.1:8024/#monitor" {
+	if got := expandVars(e.MonitorURL, e, &Model{Name: "m"}); got != "http://127.0.0.1:8024/#monitor" {
 		t.Errorf("expanded url = %q", got)
 	}
 

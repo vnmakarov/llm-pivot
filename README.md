@@ -407,7 +407,11 @@ engines:
 ### Placeholders
 
 Usable in `command`, `options`, `monitor_url`, `work_dir`, `env`:
-`{{port}}`, `{{engine}}`, `{{model}}`/`{{name}}`, `{{home}}`.
+`{{port}}`, `{{engine}}`, `{{model}}`/`{{name}}`, `{{host}}`, `{{home}}`.
+
+`{{host}}` is always `127.0.0.1`.  An engine has to be reachable on
+the loopback interface to be proxied to at all, so `--host {{host}}` is the
+safe way to write that.
 
 ### Startup validation
 
@@ -479,6 +483,7 @@ scripted.
 | Method & path                                 | Body / result                                              |
 |-----------------------------------------------|------------------------------------------------------------|
 | `GET /api/state?since=<seq>`                  | configuration, status, log lines newer than `seq`          |
+| `GET /api/state?…&monitor_body=1`             | the same, plus the sampled body of an `http` monitor       |
 | `GET /api/command?model=<name>`               | the effective command line                                 |
 | `PUT /api/settings`                           | `{monitor_port, router_port, host, …timeouts…, log_lines}` |
 | `POST /api/engines`                           | engine fields plus `original` (empty = create)             |

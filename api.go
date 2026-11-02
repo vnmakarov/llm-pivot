@@ -67,9 +67,20 @@ func (a *API) state(w http.ResponseWriter, r *http.Request) {
 	since, _ := strconv.ParseUint(r.URL.Query().Get("since"), 10, 64)
 	lines, seq, gap := a.mgr.Log().Since(since)
 	cfg := a.mgr.Config()
+	st := a.mgr.Status()
+	// The sampled body of an http-monitored engine is up to 512 KB and is
+	// only ever displayed on the engine tab, so shipping it with every
+	// one-second refresh is a continuous download for nothing. The caller
+	// asks for it when it is actually looking at it; everything else about
+	// the sample - status, time, sample number - always travels.
+	if st.Monitor != nil && r.URL.Query().Get("monitor_body") != "1" {
+		light := *st.Monitor
+		light.Body = ""
+		st.Monitor = &light
+	}
 	writeJSON(w, http.StatusOK, StateResponse{
 		Config:     cfg,
-		Status:     a.mgr.Status(),
+		Status:     st,
 		Log:        lines,
 		LogSeq:     seq,
 		LogGap:     gap,

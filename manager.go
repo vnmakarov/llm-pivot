@@ -316,7 +316,6 @@ func (m *Manager) startLocked(model string) error {
 	m.mu.RLock()
 	cfg := m.cfg
 	eng, mdl := cfg.FindModel(model)
-	host := cfg.Host
 	globalTimeout := cfg.StartupTimeout
 	m.mu.RUnlock()
 
@@ -358,10 +357,10 @@ func (m *Manager) startLocked(model string) error {
 	m.log.System("$ " + QuoteArgs(argv))
 
 	cmd := exec.Command(argv[0], argv[1:]...)
-	cmd.Dir = expandVars(eng.WorkDir, eng, mdl, host)
+	cmd.Dir = expandVars(eng.WorkDir, eng, mdl)
 	cmd.Env = os.Environ()
 	for _, kv := range eng.Env {
-		cmd.Env = append(cmd.Env, expandVars(kv, eng, mdl, host))
+		cmd.Env = append(cmd.Env, expandVars(kv, eng, mdl))
 	}
 	// Own process group, so the whole engine tree can be signalled at once.
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
@@ -408,7 +407,7 @@ func (m *Manager) startLocked(model string) error {
 		done:     make(chan struct{}),
 	}
 	if eng.NeedsMonitorURL() {
-		in.monitorURL = expandVars(eng.MonitorURL, eng, mdl, host)
+		in.monitorURL = expandVars(eng.MonitorURL, eng, mdl)
 	}
 
 	go m.log.pump(StreamStdout, outR)
@@ -680,14 +679,14 @@ func (m *Manager) Shutdown() {
 
 // buildArgv produces the final argument vector for an engine/model pair.
 func buildArgv(e *Engine, mdl *Model) ([]string, error) {
-	base, err := SplitArgs(expandVars(e.Command, e, mdl, ""))
+	base, err := SplitArgs(expandVars(e.Command, e, mdl))
 	if err != nil {
 		return nil, fmt.Errorf("engine command: %w", err)
 	}
 	if len(base) == 0 {
 		return nil, fmt.Errorf("engine command is empty")
 	}
-	over, err := SplitArgs(expandVars(mdl.Options, e, mdl, ""))
+	over, err := SplitArgs(expandVars(mdl.Options, e, mdl))
 	if err != nil {
 		return nil, fmt.Errorf("model options: %w", err)
 	}
@@ -703,7 +702,15 @@ func buildArgv(e *Engine, mdl *Model) ([]string, error) {
 
 // expandVars substitutes the {{...}} placeholders usable in commands,
 // options, monitor URLs, env entries and working directories.
-func expandVars(s string, e *Engine, mdl *Model, host string) string {
+//
+// {{host}} is engineHost everywhere, because that is the only address it
+// can usefully mean: llm-pivot reaches an engine at engineHost and nowhere
+// else, both to health-check it and to proxy to it. It used to be the
+// configured bind address in env, work_dir and monitor_url but engineHost
+// in the command, so the same placeholder said two different things - and
+// the configured one is a trap: an engine told to bind a specific external
+// address is an engine llm-pivot can no longer reach.
+func expandVars(s string, e *Engine, mdl *Model) string {
 	if s == "" || !strings.Contains(s, "{{") {
 		return s
 	}
@@ -712,7 +719,7 @@ func expandVars(s string, e *Engine, mdl *Model, host string) string {
 		"{{engine}}", e.Name,
 		"{{model}}", modelName(mdl),
 		"{{name}}", modelName(mdl),
-		"{{host}}", hostOr(host, engineHost),
+		"{{host}}", engineHost,
 		"{{home}}", os.Getenv("HOME"),
 	)
 	return r.Replace(s)
@@ -723,11 +730,4 @@ func modelName(m *Model) string {
 		return ""
 	}
 	return m.Name
-}
-
-func hostOr(h, def string) string {
-	if h == "" {
-		return def
-	}
-	return h
 }
