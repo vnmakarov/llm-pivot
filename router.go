@@ -18,7 +18,8 @@ import (
 )
 
 // maxInspectBody caps how much of a request body is buffered in order to find
-// the "model" field. Larger bodies are forwarded without inspection.
+// the "model" field. Larger bodies are forwarded whole but without inspection,
+// so they go to the engine already running rather than switching models.
 const maxInspectBody = 64 << 20
 
 // Response headers that say who actually answered a request.
@@ -163,7 +164,7 @@ func (rt *Router) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	wanted, err := requestedModel(r)
+	wanted, err := requestedModel(r, maxInspectBody)
 	if err != nil {
 		writeOpenAIError(w, http.StatusBadRequest, err.Error(), "invalid_request_error")
 		return
@@ -216,7 +217,9 @@ func (rt *Router) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 // requestedModel finds the model a request asks for, looking at the JSON body
 // and at a "model" query parameter. The body is restored for forwarding.
-func requestedModel(r *http.Request) (string, error) {
+// maxBody is how much of it may be buffered to do so; it is a parameter only
+// so that the tests can exercise the cap without building one that big.
+func requestedModel(r *http.Request, maxBody int64) (string, error) {
 	if m := strings.TrimSpace(r.URL.Query().Get("model")); m != "" {
 		return m, nil
 	}
@@ -227,15 +230,35 @@ func requestedModel(r *http.Request) (string, error) {
 	if ct != "" && !strings.Contains(strings.ToLower(ct), "json") {
 		return "", nil // multipart uploads and friends go to the running engine
 	}
-	if r.ContentLength > maxInspectBody {
+	if r.ContentLength > maxBody {
 		return "", nil
 	}
 
-	body, err := io.ReadAll(io.LimitReader(r.Body, maxInspectBody))
-	r.Body.Close()
+	// Read one byte past the cap: that is what tells a body which just fits
+	// from one which is too big. A chunked request arrives with
+	// ContentLength -1, so the check above never sees it and this read is
+	// the only place its size can be found out.
+	orig := r.Body
+	body, err := io.ReadAll(io.LimitReader(orig, maxBody+1))
 	if err != nil {
+		orig.Close()
 		return "", err
 	}
+	if int64(len(body)) > maxBody {
+		// Too big to sniff, exactly like a declared length over the cap.
+		// The bytes already read cannot be unread, so they are put back in
+		// front of the rest rather than becoming the whole body: rewriting
+		// it here - as a buffer, a new ContentLength and no transfer
+		// encoding - would forward the request silently truncated at the
+		// cap. Everything else is left as it came in, and the remainder
+		// streams straight through.
+		r.Body = struct {
+			io.Reader
+			io.Closer
+		}{io.MultiReader(bytes.NewReader(body), orig), orig}
+		return "", nil
+	}
+	orig.Close()
 	// Put the body back so the proxy can forward it unchanged.
 	r.Body = io.NopCloser(bytes.NewReader(body))
 	r.ContentLength = int64(len(body))

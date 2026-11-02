@@ -282,6 +282,12 @@ What happens:
 
 Everything else is proxied verbatim, including streaming responses.
 
+Finding the `"model"` field means buffering the request body, which is capped
+at 64 MB. A bigger body (inline base64 audio or images) is forwarded whole
+and untouched, but goes to whatever engine is running rather than switching
+models. Put `?model=<name>` in the query string to route it without the body
+being read at all.
+
 Two endpoints are answered by llm-pivot itself:
 
 | Endpoint             | Answer                                                                   |

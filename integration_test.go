@@ -71,6 +71,17 @@ func TestHelperEngine(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		fmt.Fprintf(w, `{"served_by":%q,"echo":%s}`, tag, string(body))
 	})
+	// Counts the body instead of echoing it, so a request far too big to
+	// hold twice can still be checked for having arrived whole.
+	mux.HandleFunc("/v1/size", func(w http.ResponseWriter, r *http.Request) {
+		n, err := io.Copy(io.Discard, r.Body)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"served_by":%q,"bytes":%d}`, tag, n)
+	})
 	srv := &http.Server{Addr: "127.0.0.1:" + port, Handler: mux}
 
 	// ER_FAKE_EXIT_MS stands in for an engine that starts fine and then dies
@@ -987,5 +998,190 @@ func TestSettingsSaveDoesNotBakeInTheOverride(t *testing.T) {
 	}
 	if onDisk.LogLines != 256 {
 		t.Errorf("the save lost the real edit: log_lines = %d", onDisk.LogLines)
+	}
+}
+
+// ------------------------------------------- oversized request bodies
+
+// jsonBody builds a JSON request body of at least n bytes which names a
+// model, standing in for a chat request carrying inline base64 audio.
+func jsonBody(model string, n int) []byte {
+	head := fmt.Sprintf(`{"model":%q,"blob":"`, model)
+	tail := `"}`
+	pad := n - len(head) - len(tail)
+	if pad < 0 {
+		pad = 0
+	}
+	return []byte(head + strings.Repeat("x", pad) + tail)
+}
+
+// A chunked request carries ContentLength -1, so the size pre-check never
+// catches it. requestedModel must then not rebuild the body out of the
+// prefix it buffered: that forwards the request truncated at the cap, with
+// a ContentLength that makes the truncation look deliberate.
+func TestOversizedChunkedBodyIsForwardedWhole(t *testing.T) {
+	const limit = 64
+	full := jsonBody("alpha", 4*limit)
+
+	r := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(full))
+	r.Header.Set("Content-Type", "application/json")
+	r.ContentLength = -1 // what a chunked request looks like
+	r.TransferEncoding = []string{"chunked"}
+
+	model, err := requestedModel(r, limit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if model != "" {
+		t.Errorf("a body over the cap must not be sniffed, got model %q", model)
+	}
+	got, err := io.ReadAll(r.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, full) {
+		t.Errorf("the body was forwarded truncated: %d of %d bytes", len(got), len(full))
+	}
+	// Rewriting the framing is what made the truncation silent.
+	if r.ContentLength != -1 || len(r.TransferEncoding) != 1 {
+		t.Errorf("the framing was rewritten: ContentLength %d, TransferEncoding %v",
+			r.ContentLength, r.TransferEncoding)
+	}
+}
+
+// The boundary the other way: a body that exactly fills the cap is not over
+// it, so it must still be read, sniffed and put back.
+func TestBodyExactlyAtTheCapIsStillSniffed(t *testing.T) {
+	full := jsonBody("alpha", 64)
+	limit := int64(len(full))
+
+	r := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(full))
+	r.Header.Set("Content-Type", "application/json")
+	r.ContentLength = -1
+	r.TransferEncoding = []string{"chunked"}
+
+	model, err := requestedModel(r, limit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if model != "alpha" {
+		t.Errorf("model = %q, want alpha", model)
+	}
+	got, _ := io.ReadAll(r.Body)
+	if !bytes.Equal(got, full) {
+		t.Errorf("the restored body differs: %d of %d bytes", len(got), len(full))
+	}
+	if r.ContentLength != limit {
+		t.Errorf("ContentLength = %d, want %d", r.ContentLength, limit)
+	}
+	// A buffered body can be replayed, which is what GetBody promises.
+	if r.GetBody == nil {
+		t.Fatal("GetBody was not set for a buffered body")
+	}
+	rc, err := r.GetBody()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again, _ := io.ReadAll(rc); !bytes.Equal(again, full) {
+		t.Error("GetBody did not replay the body")
+	}
+}
+
+// A declared length over the cap is refused inspection without the body
+// being touched at all - the behaviour the chunked case now matches.
+func TestDeclaredOversizedBodyIsLeftAlone(t *testing.T) {
+	full := jsonBody("alpha", 256)
+	r := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(full))
+	r.Header.Set("Content-Type", "application/json")
+
+	model, err := requestedModel(r, 64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if model != "" {
+		t.Errorf("model = %q, want none", model)
+	}
+	if got, _ := io.ReadAll(r.Body); !bytes.Equal(got, full) {
+		t.Errorf("the body was consumed: %d of %d bytes", len(got), len(full))
+	}
+}
+
+// The same thing through the real router at the real cap: a chunked request
+// bigger than maxInspectBody must reach the engine byte for byte.
+func TestRouterForwardsAHugeChunkedBodyWhole(t *testing.T) {
+	if testing.Short() {
+		t.Skip("allocates more than the inspection cap")
+	}
+	mgr := testManager(t, []*Model{{Name: "alpha"}}, nil)
+	if err := mgr.Start("alpha"); err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(NewRouter(mgr))
+	defer srv.Close()
+
+	// One byte past the cap is enough to prove nothing was cut off, and
+	// streaming it keeps a second copy out of the client.
+	size := int64(maxInspectBody) + 1
+	req, err := http.NewRequest(http.MethodPost, srv.URL+"/v1/size",
+		io.LimitReader(repeatReader('x'), size))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.ContentLength = -1 // chunked: the router cannot know the size up front
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status %d: %s", resp.StatusCode, raw)
+	}
+	var out struct {
+		ServedBy string `json:"served_by"`
+		Bytes    int64  `json:"bytes"`
+	}
+	if err := json.Unmarshal(raw, &out); err != nil {
+		t.Fatalf("bad JSON %q: %v", raw, err)
+	}
+	if out.Bytes != size {
+		t.Errorf("the engine received %d bytes of %d: the body was truncated", out.Bytes, size)
+	}
+	if out.ServedBy != "alpha" {
+		t.Errorf("served_by = %q, want alpha", out.ServedBy)
+	}
+}
+
+// repeatReader is an endless stream of one byte, so a body larger than the
+// inspection cap can be sent without ever holding it in the test.
+type repeatReader byte
+
+func (b repeatReader) Read(p []byte) (int, error) {
+	for i := range p {
+		p[i] = byte(b)
+	}
+	return len(p), nil
+}
+
+// ?model= is the documented way to route a body too big to sniff: it must
+// switch models without the body being read at all.
+func TestQueryModelRoutesAnUnsniffableBody(t *testing.T) {
+	full := jsonBody("alpha", 256)
+	r := httptest.NewRequest(http.MethodPost, "/v1/chat/completions?model=beta", bytes.NewReader(full))
+	r.Header.Set("Content-Type", "application/json")
+	r.ContentLength = -1
+	r.TransferEncoding = []string{"chunked"}
+
+	model, err := requestedModel(r, 64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if model != "beta" {
+		t.Errorf("model = %q, want beta from the query string", model)
+	}
+	if got, _ := io.ReadAll(r.Body); !bytes.Equal(got, full) {
+		t.Errorf("the body was touched: %d of %d bytes", len(got), len(full))
 	}
 }
