@@ -90,14 +90,26 @@ function humanAge(sec) {
   return `${s}s`;
 }
 
+/* The engine and model the current state is about. A starting engine has no
+   process yet and a failed one no longer has one, so st.engine/st.model are
+   empty for both and only the attribution fields can name them. */
+function stateSubject(st) {
+  switch (st.state) {
+    case 'starting': return { engine: st.starting_engine || '', model: st.starting_model || '' };
+    case 'failed': return { engine: st.failed_engine || '', model: st.failed_model || '' };
+    default: return { engine: st.engine || '', model: st.model || '' };
+  }
+}
+
 function renderTop() {
   const st = S.status || {};
+  const who = stateSubject(st);
   $('top-light').className = lightClass(st.state);
   let text;
   switch (st.state) {
-    case 'running': text = `${st.engine} · ${st.model} — running ${humanAge(st.uptime_seconds)}`; break;
-    case 'starting': text = `${st.engine} · ${st.model} — starting…`; break;
-    case 'stopping': text = `${st.engine} · ${st.model} — stopping…`; break;
+    case 'running': text = `${who.engine} · ${who.model} — running ${humanAge(st.uptime_seconds)}`; break;
+    case 'starting': text = `${who.engine} · ${who.model} — starting…`; break;
+    case 'stopping': text = `${who.engine} · ${who.model} — stopping…`; break;
     case 'failed': text = st.last_error ? 'failed: ' + st.last_error : 'failed'; break;
     default: text = 'no engine running';
   }
@@ -109,21 +121,19 @@ function renderTop() {
 
 /* ----------------------------------------------------- left pane (tree) */
 
+// A model's light shows the current state when that state is about it: the
+// one being started goes amber before its process exists, and the one whose
+// engine died stays red after its process is gone.
 function modelLight(name) {
   const st = S.status || {};
-  if (st.model === name) return lightClass(st.state);
-  // The engine that died is gone from st.model; its failure still belongs to
-  // the model it was serving, and that model's light stays red until it is
-  // started again.
-  if (st.state === 'failed' && st.failed_model === name) return 'light failed';
-  return 'light';
+  return stateSubject(st).model === name ? lightClass(st.state) : 'light';
 }
 
 function renderTree() {
   const c = S.cfg;
   if (!c) return;
   const st = S.status || {};
-  const sig = JSON.stringify([c.engines, st.model, st.failed_model, st.state, S.sel]);
+  const sig = JSON.stringify([c.engines, stateSubject(st).model, st.state, S.sel]);
   if (sig === S.treeSig) return;
   S.treeSig = sig;
 
@@ -575,7 +585,10 @@ function refreshModelControls() {
   const isNew = s.kind === 'new-model';
   const st = S.status || {};
   const name = isNew ? '' : s.model;
-  const isCurrent = !isNew && st.model === name;
+  // "Current" means this model's engine is live, which a starting one is
+  // (before it has a process) and a failed one is not (after losing its
+  // own) - the failed model gets the error banner below instead.
+  const isCurrent = !isNew && st.state !== 'failed' && stateSubject(st).model === name;
   const busy = st.state === 'starting' || st.state === 'stopping';
 
   const statusBox = $('model-status');

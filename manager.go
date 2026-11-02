@@ -83,12 +83,16 @@ type Status struct {
 	// FailedEngine/FailedModel name the engine and model the last failure
 	// belongs to: the process is gone, so inst can no longer name them, and
 	// without them the page cannot say which model turned red.
-	FailedEngine string           `json:"failed_engine"`
-	FailedModel  string           `json:"failed_model"`
-	MonitorMode  string           `json:"monitor_mode"`
-	MonitorURL   string           `json:"monitor_url"`
-	Monitor      *MonitorSnapshot `json:"monitor"`
-	RouterURL    string           `json:"router_url"`
+	FailedEngine string `json:"failed_engine"`
+	FailedModel  string `json:"failed_model"`
+	// StartingEngine/StartingModel are the mirror image: for most of a start
+	// there is no process yet, so inst cannot name what is coming up either.
+	StartingEngine string           `json:"starting_engine"`
+	StartingModel  string           `json:"starting_model"`
+	MonitorMode    string           `json:"monitor_mode"`
+	MonitorURL     string           `json:"monitor_url"`
+	Monitor        *MonitorSnapshot `json:"monitor"`
+	RouterURL      string           `json:"router_url"`
 }
 
 // Manager owns the configuration and the single engine process that may run
@@ -101,11 +105,13 @@ type Manager struct {
 	inst    *instance
 	state   string
 	lastErr string
-	// failedEngine/failedModel carry the same attribution as Status: the
-	// failed model is not the running one, and inst cannot name it any more.
-	failedEngine, failedModel string
-	snap                      *MonitorSnapshot
-	inflight                  int // requests being proxied right now
+	// failedEngine/failedModel and startingEngine/startingModel carry the
+	// same attribution as Status: neither the model that failed nor the one
+	// coming up is the running one, and inst cannot name either of them.
+	failedEngine, failedModel     string
+	startingEngine, startingModel string
+	snap                          *MonitorSnapshot
+	inflight                      int // requests being proxied right now
 
 	log    *LogBuffer
 	client *http.Client
@@ -154,11 +160,14 @@ func (m *Manager) Status() Status {
 			st.MonitorMode = e.MonitorMode()
 		}
 	}
-	// A failed engine left m.inst, so without this half of the answer every
-	// model looks idle: its light stays grey and its card shows no error.
-	if m.state == StateFailed {
-		st.FailedEngine = m.failedEngine
-		st.FailedModel = m.failedModel
+	// A failed engine has left m.inst and a starting one has not reached it
+	// yet, so without this half of the answer the model the state belongs to
+	// has no name at all: its light stays grey and its card says nothing.
+	switch m.state {
+	case StateFailed:
+		st.FailedEngine, st.FailedModel = m.failedEngine, m.failedModel
+	case StateStarting:
+		st.StartingEngine, st.StartingModel = m.startingEngine, m.startingModel
 	}
 	return st
 }
@@ -308,6 +317,10 @@ func (m *Manager) startLocked(model string) error {
 
 	m.mu.Lock()
 	m.state = StateStarting
+	// Claim the model now, not when the process exists: waitPortFree below
+	// can spin for seconds, and the page has to be able to say what it is
+	// waiting for the whole time.
+	m.startingEngine, m.startingModel = eng.Name, mdl.Name
 	m.lastErr = ""
 	m.snap = nil
 	m.mu.Unlock()

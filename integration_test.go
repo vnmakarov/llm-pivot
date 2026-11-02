@@ -1303,3 +1303,56 @@ func logHas(mgr *Manager, want string) bool {
 	}
 	return false
 }
+
+// For most of a start there is no process yet - waitPortFree alone can spin
+// for seconds - so Status cannot name what is coming up from inst. Without
+// the attribution the top bar reads " · — starting…" and no model in the
+// tree lights up, which is exactly what a dead engine used to look like.
+func TestStartingNamesTheModelBeforeItHasAProcess(t *testing.T) {
+	mgr := testManager(t, []*Model{{Name: "alpha"}}, nil)
+	port := mgr.Config().Engines[0].Port
+
+	// Holding the engine's port keeps the start in waitPortFree, which
+	// widens the window that exists on every start into a usable one.
+	ln, err := net.Listen("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := make(chan error, 1)
+	go func() { started <- mgr.Start("alpha") }()
+
+	var st Status
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		if st = mgr.Status(); st.State == StateStarting {
+			break
+		}
+		if time.Now().After(deadline) {
+			ln.Close()
+			t.Fatalf("never saw the starting state: %+v", st)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if st.StartingModel != "alpha" || st.StartingEngine != "fake" {
+		t.Errorf("the start is not attributed to alpha: %+v", st)
+	}
+	if st.Model != "" || st.PID != 0 {
+		// Nothing is running yet, and model must keep meaning "running".
+		t.Errorf("a process that does not exist was reported as running: %+v", st)
+	}
+
+	// Let go of the port so the start can finish.
+	ln.Close()
+	if err := <-started; err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	st = mgr.Status()
+	if st.State != StateRunning || st.Model != "alpha" {
+		t.Fatalf("after the start: %+v", st)
+	}
+	// Once it is running, inst names it and the attribution must go quiet
+	// rather than linger as a second, stale answer.
+	if st.StartingModel != "" || st.StartingEngine != "" {
+		t.Errorf("a running engine is still reported as starting: %+v", st)
+	}
+}
