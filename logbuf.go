@@ -39,6 +39,24 @@ func NewLogBuffer(max int) *LogBuffer {
 	return &LogBuffer{max: max, lines: make([]LogLine, 0, 256)}
 }
 
+// SetMax resizes the ring. log_lines is editable on the settings page, which
+// promises that a save takes effect at once, so this has to work on a buffer
+// that is already filling up: shrinking drops the oldest lines right away
+// rather than waiting for the next one to arrive.
+func (b *LogBuffer) SetMax(max int) {
+	if max <= 0 {
+		max = DefaultLogLines
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.max = max
+	if len(b.lines) > b.max {
+		// A fresh array, not a copy in place: the old one would go on
+		// holding the text of every dropped line.
+		b.lines = append(make([]LogLine, 0, b.max), b.lines[len(b.lines)-b.max:]...)
+	}
+}
+
 // Append records one line and returns its sequence number.
 func (b *LogBuffer) Append(stream, text string) uint64 {
 	b.mu.Lock()

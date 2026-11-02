@@ -36,10 +36,20 @@ func (m *Manager) mutate(fn func(*Config) error) (*Config, *Config, error) {
 	if err := next.Save(); err != nil {
 		return nil, nil, fmt.Errorf("cannot write %s: %w", next.Path(), err)
 	}
+	m.useConfig(next)
+	return old, next, nil
+}
+
+// useConfig makes a configuration current and brings the runtime state that
+// it sizes into line with it, so that no caller has to remember to.
+func (m *Manager) useConfig(next *Config) {
 	m.mu.Lock()
 	m.cfg = next
 	m.mu.Unlock()
-	return old, next, nil
+	// The log ring is the one piece of live state a setting sizes, and both
+	// the page and the file promise that a change to it applies at once
+	// rather than at the next restart.
+	m.log.SetMax(next.LogLines)
 }
 
 // stopIfStale terminates the running engine when the change invalidated its
@@ -121,9 +131,7 @@ func (m *Manager) Reload() (*EditResult, error) {
 	if err := next.Validate(); err != nil {
 		return nil, fmt.Errorf("%s with the command-line overrides applied: %w", next.Path(), err)
 	}
-	m.mu.Lock()
-	m.cfg = next
-	m.mu.Unlock()
+	m.useConfig(next)
 
 	res := &EditResult{
 		MonitorPort: next.MonitorPort,
@@ -175,6 +183,13 @@ func (m *Manager) UpdateSettings(in SettingsInput) (*EditResult, error) {
 		PortsMoved:  old.MonitorPort != next.MonitorPort || old.RouterPort != next.RouterPort || old.Host != next.Host,
 	}
 	res.Notes = append(res.Notes, dropped...)
+	if old.LogLines != next.LogLines {
+		note := fmt.Sprintf("The log buffer now keeps %d lines.", next.LogLines)
+		if next.LogLines < old.LogLines {
+			note += " Lines older than that were dropped."
+		}
+		res.Notes = append(res.Notes, note)
+	}
 	res.Notes = append(res.Notes, m.stopIfStale(old, next)...)
 	return res, nil
 }

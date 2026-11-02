@@ -344,6 +344,9 @@ function renderSettings() {
         setTimeout(() => moveTo(url), 1200);
       }
       await poll();
+      // poll() refreshed S.cfg, so a smaller log_lines applies to what is
+      // already on screen too, not only to lines arriving after it.
+      trimLog();
       renderDetail(true);
     } catch (e) {
       S.banner = { kind: 'error', text: e.message };
@@ -708,8 +711,20 @@ function appendLines(lines) {
     frag.appendChild(div);
   }
   pre.appendChild(frag);
-  while (pre.childElementCount > 4000) pre.removeChild(pre.firstChild);
+  trimLog();
   if (follow && atBottom) pre.scrollTop = pre.scrollHeight;
+}
+
+/* The view keeps what the log buffer keeps. Hard-coding a limit here made
+   "Log buffer — lines kept" a lie in both directions: a bigger setting still
+   lost lines on screen, a smaller one kept showing lines the server had
+   already dropped. DefaultLogLines is the fallback for a state we have not
+   fetched yet. */
+function trimLog() {
+  const pre = $('logview');
+  if (!pre) return;
+  const keep = (S.cfg && S.cfg.log_lines) || 4000;
+  while (pre.childElementCount > keep) pre.removeChild(pre.firstChild);
 }
 
 function renderMonitor() {

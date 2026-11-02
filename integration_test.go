@@ -1185,3 +1185,68 @@ func TestQueryModelRoutesAnUnsniffableBody(t *testing.T) {
 		t.Errorf("the body was touched: %d of %d bytes", len(got), len(full))
 	}
 }
+
+// ------------------------------------------------------- log_lines
+
+// The settings form presents log_lines as live-editable and the page says a
+// save applies at once, but the ring was sized once in NewManager and never
+// again: a save asking for 100 lines left the live buffer 4000 wide.
+func TestSettingsResizeTheLogBuffer(t *testing.T) {
+	mgr := testManager(t, []*Model{{Name: "alpha"}}, nil)
+	for i := 0; i < 500; i++ {
+		mgr.Log().Append(StreamStdout, fmt.Sprintf("line %d", i))
+	}
+
+	shown := mgr.Config()
+	res, err := mgr.UpdateSettings(SettingsInput{
+		MonitorPort: shown.MonitorPort,
+		RouterPort:  shown.RouterPort,
+		Host:        shown.Host,
+		LogLines:    100,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if lines, _, _ := mgr.Log().Since(0); len(lines) != 100 {
+		t.Errorf("the live buffer still holds %d lines, want 100", len(lines))
+	}
+	// Further output must respect the new size too, not just the trim.
+	for i := 0; i < 300; i++ {
+		mgr.Log().Append(StreamStdout, "more")
+	}
+	if lines, _, _ := mgr.Log().Since(0); len(lines) != 100 {
+		t.Errorf("the new limit did not hold: %d lines", len(lines))
+	}
+	var told bool
+	for _, n := range res.Notes {
+		if strings.Contains(n, "100 lines") {
+			told = true
+		}
+	}
+	if !told {
+		t.Errorf("the save did not mention the new buffer size: %v", res.Notes)
+	}
+}
+
+// systemctl reload has to resize the ring too; the file is the other way
+// log_lines can change under a running process.
+func TestReloadResizesTheLogBuffer(t *testing.T) {
+	mgr := testManager(t, []*Model{{Name: "alpha"}}, nil)
+	for i := 0; i < 500; i++ {
+		mgr.Log().Append(StreamStdout, fmt.Sprintf("line %d", i))
+	}
+
+	mgr.mu.Lock()
+	mgr.cfg.LogLines = 120
+	err := mgr.cfg.Save()
+	mgr.mu.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := mgr.Reload(); err != nil {
+		t.Fatal(err)
+	}
+	if lines, _, _ := mgr.Log().Since(0); len(lines) != 120 {
+		t.Errorf("after the reload the buffer holds %d lines, want 120", len(lines))
+	}
+}

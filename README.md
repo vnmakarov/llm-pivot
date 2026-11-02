@@ -378,7 +378,7 @@ engines:
 | `startup_timeout_seconds`       | `180`       | global startup budget                      |
 | `graceful_stop_timeout_seconds` | `20`        | `SIGTERM` grace before `SIGKILL`           |
 | `inactive_stop_timeout_seconds` | `600`       | stop an idle engine after this; `-1` never |
-| `log_lines`                     | `4000`      | monitoring buffer size                     |
+| `log_lines`                     | `4000`      | monitoring buffer size; resized live       |
 
 **Per engine**
 
