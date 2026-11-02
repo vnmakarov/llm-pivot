@@ -112,6 +112,15 @@ func (m *Manager) Reload() (*EditResult, error) {
 	if err != nil {
 		return nil, err
 	}
+	// The file knows nothing of the command line, so a reload would
+	// otherwise un-apply the overrides this run was started with - and then
+	// move the listeners back to the file's ports. Put them on again, and
+	// validate once more because the file may have moved a port into a
+	// collision with one of them.
+	next.adoptOverrides(old)
+	if err := next.Validate(); err != nil {
+		return nil, fmt.Errorf("%s with the command-line overrides applied: %w", next.Path(), err)
+	}
 	m.mu.Lock()
 	m.cfg = next
 	m.mu.Unlock()
@@ -142,10 +151,13 @@ func (m *Manager) UpdateSettings(in SettingsInput) (*EditResult, error) {
 	editMu.Lock()
 	defer editMu.Unlock()
 
+	var dropped []string
 	old, next, err := m.mutate(func(c *Config) error {
-		c.MonitorPort = in.MonitorPort
-		c.RouterPort = in.RouterPort
-		c.Host = in.Host
+		// The three listener keys may be shadowed by a command-line flag,
+		// so they are set through SetListeners rather than written here: it
+		// keeps the file's own value apart from the flag's, and tells us
+		// when an edit had to drop an override to take effect.
+		dropped = c.SetListeners(in.MonitorPort, in.RouterPort, in.Host)
 		c.StartupTimeout = in.StartupTimeout
 		c.GracefulStopTimeout = in.GracefulStopTimeout
 		c.InactiveStopTimeout = in.InactiveStopTimeout
@@ -162,6 +174,7 @@ func (m *Manager) UpdateSettings(in SettingsInput) (*EditResult, error) {
 		RouterPort:  next.RouterPort,
 		PortsMoved:  old.MonitorPort != next.MonitorPort || old.RouterPort != next.RouterPort || old.Host != next.Host,
 	}
+	res.Notes = append(res.Notes, dropped...)
 	res.Notes = append(res.Notes, m.stopIfStale(old, next)...)
 	return res, nil
 }

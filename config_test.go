@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -269,5 +270,113 @@ func TestEmbedSpellings(t *testing.T) {
 		if got := normalizeMonitor(s); got != MonitorEmbed {
 			t.Errorf("normalizeMonitor(%q) = %q, want embed", s, got)
 		}
+	}
+}
+
+// ------------------------------------------------- command-line overrides
+
+const overridableCfg = `
+monitor_port: 8061
+router_port: 8078
+host: 127.0.0.1
+engines:
+  - name: e
+    port: 8080
+    command: /bin/true
+    models: []
+`
+
+// README: "Overrides are not written back to the file". A save of any kind
+// must leave the file's own ports alone, however many times it happens.
+func TestOverridesNeverReachTheFile(t *testing.T) {
+	p := writeCfg(t, overridableCfg)
+	c, err := LoadConfig(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.Overrides(8100, 8101, "0.0.0.0")
+	if c.MonitorPort != 8100 || c.RouterPort != 8101 || c.Host != "0.0.0.0" {
+		t.Fatalf("the overrides are not in force: %d %d %q", c.MonitorPort, c.RouterPort, c.Host)
+	}
+
+	// An edit that has nothing to do with the ports, saved twice: the second
+	// save must not pick the flag values up from the first.
+	for i := 0; i < 2; i++ {
+		c.Engines[0].Models = append(c.Engines[0].Models, &Model{Name: fmt.Sprintf("m%d", i)})
+		if err := c.Save(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	onDisk, err := LoadConfig(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if onDisk.MonitorPort != 8061 || onDisk.RouterPort != 8078 || onDisk.Host != "127.0.0.1" {
+		t.Errorf("the overrides leaked into %s: %d %d %q",
+			p, onDisk.MonitorPort, onDisk.RouterPort, onDisk.Host)
+	}
+	// ... while the running configuration still listens where it was told to.
+	if c.MonitorPort != 8100 || c.RouterPort != 8101 || c.Host != "0.0.0.0" {
+		t.Errorf("Save changed the live configuration: %d %d %q", c.MonitorPort, c.RouterPort, c.Host)
+	}
+}
+
+// Saving the settings form without touching the ports resubmits the values in
+// force, which are the flag's. That must not be read as an edit.
+func TestSettingsFormUntouchedKeepsTheOverride(t *testing.T) {
+	p := writeCfg(t, overridableCfg)
+	c, _ := LoadConfig(p)
+	c.Overrides(8100, 0, "")
+
+	if notes := c.SetListeners(c.MonitorPort, c.RouterPort, c.Host); len(notes) != 0 {
+		t.Errorf("an untouched form reported changes: %v", notes)
+	}
+	if err := c.Save(); err != nil {
+		t.Fatal(err)
+	}
+	onDisk, _ := LoadConfig(p)
+	if onDisk.MonitorPort != 8061 {
+		t.Errorf("monitor_port in the file = %d, want the file's own 8061", onDisk.MonitorPort)
+	}
+	if c.MonitorPort != 8100 {
+		t.Errorf("the override stopped applying: %d", c.MonitorPort)
+	}
+}
+
+// Typing a different port into the page must take effect rather than be
+// swallowed by the flag, and the page is told that the flag was dropped.
+func TestSettingsPageEditBeatsTheOverride(t *testing.T) {
+	p := writeCfg(t, overridableCfg)
+	c, _ := LoadConfig(p)
+	c.Overrides(8100, 0, "")
+
+	notes := c.SetListeners(8200, c.RouterPort, c.Host)
+	if len(notes) != 1 || !strings.Contains(notes[0], "-monitor-port 8100") {
+		t.Fatalf("the dropped override was not reported: %v", notes)
+	}
+	if c.MonitorPort != 8200 {
+		t.Errorf("the page edit did not take effect: %d", c.MonitorPort)
+	}
+	if err := c.Save(); err != nil {
+		t.Fatal(err)
+	}
+	if onDisk, _ := LoadConfig(p); onDisk.MonitorPort != 8200 {
+		t.Errorf("monitor_port in the file = %d, want the edited 8200", onDisk.MonitorPort)
+	}
+	if len(c.overridden()) != 0 {
+		t.Errorf("the override survived the edit: %v", c.overridden())
+	}
+}
+
+// A Config built in code - as the tests and NewManager do - has no file layer
+// of its own, so normalize has to seed one instead of defaulting over it.
+func TestNormalizeKeepsAHandBuiltPort(t *testing.T) {
+	c := &Config{MonitorPort: 9001, RouterPort: 9002, Host: "::1"}
+	c.normalize()
+	if c.MonitorPort != 9001 || c.RouterPort != 9002 || c.Host != "::1" {
+		t.Fatalf("normalize overwrote the ports: %d %d %q", c.MonitorPort, c.RouterPort, c.Host)
+	}
+	if c.file.MonitorPort != 9001 || c.file.RouterPort != 9002 || c.file.Host != "::1" {
+		t.Errorf("the file layer was not seeded: %+v", c.file)
 	}
 }

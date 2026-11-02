@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -81,7 +82,24 @@ type Config struct {
 	LogLines            int       `yaml:"log_lines,omitempty" json:"log_lines"`
 	Engines             []*Engine `yaml:"engines" json:"engines"`
 
+	// A command-line flag may shadow the three keys above that say where to
+	// listen. The exported fields always hold the effective value - the file
+	// with the flag layered on top - because that is what the listeners, the
+	// page and the port checks have to see. file and flag keep the two
+	// layers apart so that Save() can write the file's own value back
+	// (README: "Overrides are not written back to the file") and Reload()
+	// can put the flag on again after re-reading the file.
+	file, flag listeners
+
 	path string `yaml:"-" json:"-"`
+}
+
+// listeners is one layer of the three keys that decide where llm-pivot
+// listens. A zero port or an empty host means "this layer says nothing".
+type listeners struct {
+	MonitorPort int
+	RouterPort  int
+	Host        string
 }
 
 // Clone returns a deep copy, so the HTTP layer can hand out or edit a
@@ -95,6 +113,8 @@ func (c *Config) Clone() *Config {
 		GracefulStopTimeout: c.GracefulStopTimeout,
 		InactiveStopTimeout: c.InactiveStopTimeout,
 		LogLines:            c.LogLines,
+		file:                c.file,
+		flag:                c.flag,
 		path:                c.path,
 	}
 	for _, e := range c.Engines {
@@ -166,18 +186,115 @@ func (e *Engine) PollInterval() int {
 	return DefaultMonitorPoll
 }
 
+// Overrides layers the -monitor-port, -router-port and -host flags on top of
+// what the file said. A zero port or an empty host means the flag was not
+// given. The overrides stay with the configuration: they survive Clone, they
+// are re-applied after every Reload, and Save keeps them out of the file.
+func (c *Config) Overrides(monitorPort, routerPort int, host string) {
+	c.flag = listeners{MonitorPort: monitorPort, RouterPort: routerPort, Host: strings.TrimSpace(host)}
+	c.normalize()
+}
+
+// adoptOverrides carries the command-line flags of one configuration over to
+// its replacement, which is what a reload re-reading the file needs.
+func (c *Config) adoptOverrides(from *Config) {
+	c.flag = from.flag
+	c.normalize()
+}
+
+// overridden names the keys a command-line flag currently shadows, so that
+// the page and the log can say why the file and the live value differ.
+func (c *Config) overridden() []string {
+	var out []string
+	if c.flag.MonitorPort != 0 && c.flag.MonitorPort != c.file.MonitorPort {
+		out = append(out, "monitor_port")
+	}
+	if c.flag.RouterPort != 0 && c.flag.RouterPort != c.file.RouterPort {
+		out = append(out, "router_port")
+	}
+	if c.flag.Host != "" && c.flag.Host != c.file.Host {
+		out = append(out, "host")
+	}
+	return out
+}
+
+// SetListeners records the three keys the settings page can change. A value
+// that differs from the one in force also drops a command-line override of
+// that key, because the page must not silently ignore what was typed into
+// it; the note returned for each says so. A value equal to the one in force
+// says nothing, so saving the form untouched keeps the overrides and leaves
+// the file's own values alone - which is what makes them non-sticky.
+func (c *Config) SetListeners(monitorPort, routerPort int, host string) []string {
+	var notes []string
+	// was is the flag's own value, empty when no flag shadowed this key.
+	drop := func(key, was string) {
+		if was != "" {
+			notes = append(notes, fmt.Sprintf("-%s %s no longer applies: the page set %s itself.",
+				strings.ReplaceAll(key, "_", "-"), was, key))
+		}
+	}
+	if monitorPort > 0 && monitorPort != c.MonitorPort {
+		drop("monitor_port", flagged(c.flag.MonitorPort))
+		c.file.MonitorPort, c.flag.MonitorPort = monitorPort, 0
+	}
+	if routerPort > 0 && routerPort != c.RouterPort {
+		drop("router_port", flagged(c.flag.RouterPort))
+		c.file.RouterPort, c.flag.RouterPort = routerPort, 0
+	}
+	if host = strings.TrimSpace(host); host != "" && host != c.Host {
+		drop("host", c.flag.Host)
+		c.file.Host, c.flag.Host = host, ""
+	}
+	c.normalize()
+	return notes
+}
+
+// flagged renders a port a flag set, or "" when the flag was not given.
+func flagged(port int) string {
+	if port == 0 {
+		return ""
+	}
+	return strconv.Itoa(port)
+}
+
 // normalize fills in defaults and canonicalises user-written values.
 // It is called both after loading and before saving.
 func (c *Config) normalize() {
-	if c.MonitorPort == 0 {
-		c.MonitorPort = DefaultMonitorPort
+	// Defaults belong to the file's own layer, so that a flag is never the
+	// thing that gets defaulted and never the thing that gets written back.
+	// An empty layer adopts the exported fields first: that is how a freshly
+	// decoded file - and a Config built in code - gets its layer filled in.
+	if c.file.MonitorPort == 0 {
+		c.file.MonitorPort = c.MonitorPort
 	}
-	if c.RouterPort == 0 {
-		c.RouterPort = DefaultRouterPort
+	if c.file.RouterPort == 0 {
+		c.file.RouterPort = c.RouterPort
 	}
-	if strings.TrimSpace(c.Host) == "" {
-		c.Host = DefaultHost
+	if strings.TrimSpace(c.file.Host) == "" {
+		c.file.Host = strings.TrimSpace(c.Host)
 	}
+	if c.file.MonitorPort == 0 {
+		c.file.MonitorPort = DefaultMonitorPort
+	}
+	if c.file.RouterPort == 0 {
+		c.file.RouterPort = DefaultRouterPort
+	}
+	if c.file.Host == "" {
+		c.file.Host = DefaultHost
+	}
+
+	// The effective values the rest of the program reads.
+	c.MonitorPort, c.RouterPort, c.Host = c.file.MonitorPort, c.file.RouterPort, c.file.Host
+	if c.flag.MonitorPort != 0 {
+		c.MonitorPort = c.flag.MonitorPort
+	}
+	if c.flag.RouterPort != 0 {
+		c.RouterPort = c.flag.RouterPort
+	}
+	if c.flag.Host != "" {
+		c.Host = c.flag.Host
+	}
+
 	if c.StartupTimeout <= 0 {
 		c.StartupTimeout = DefaultStartupTimeout
 	}
@@ -338,7 +455,13 @@ func LoadConfig(path string) (*Config, error) {
 // Save writes the configuration back atomically.
 func (c *Config) Save() error {
 	c.normalize()
-	data, err := yaml.Marshal(c)
+	// Write the file's own values for the three keys a flag may shadow: an
+	// override is a property of this run, not of the file (README:
+	// "Overrides are not written back to the file"). The copy is shallow
+	// because marshalling only reads the engines.
+	onFile := *c
+	onFile.MonitorPort, onFile.RouterPort, onFile.Host = c.file.MonitorPort, c.file.RouterPort, c.file.Host
+	data, err := yaml.Marshal(&onFile)
 	if err != nil {
 		return err
 	}

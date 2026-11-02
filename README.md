@@ -449,7 +449,19 @@ to the monitor as `$ …` when an engine starts.
 -version               print the version and exit
 ```
 
-Overrides are not written back to the file.
+Overrides are not written back to the file. They belong to the run, not to
+the configuration: saving anything from the page writes the file's own
+`monitor_port`, `router_port` and `host` back unchanged, and a reload
+(`systemctl --user reload llm-pivot`) puts the overrides on again after
+re-reading the file, so the listeners stay where the command line asked.
+
+The page shows the value in force, which is the override. Typing a *different*
+one into the settings form does take effect and is written to the file — the
+page never silently ignores what you type — and the form says which override
+it had to drop to do so. The next start applies the flag again.
+
+`-check` validates the file on its own and then once more with the overrides
+applied, so a flag that collides with an engine port is reported too.
 
 ---
 

@@ -904,3 +904,88 @@ func assertProcessGone(t *testing.T, pid int) {
 	}
 	t.Errorf("process %d is still alive", pid)
 }
+
+// overrideManager puts command-line overrides on the manager's live
+// configuration, as main does before handing it over, and writes the file
+// the way it would be on disk - without them.
+func overrideManager(t *testing.T, mgr *Manager, monitorPort, routerPort int, host string) {
+	t.Helper()
+	mgr.mu.Lock()
+	defer mgr.mu.Unlock()
+	mgr.cfg.Overrides(monitorPort, routerPort, host)
+	if err := mgr.cfg.Save(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A reload re-reads the file, which knows nothing of the command line. The
+// overrides this run was started with have to go back on, or systemctl
+// reload silently un-applies them - and PortsMoved then drags the listeners
+// back to the file's ports.
+func TestReloadKeepsTheCommandLineOverrides(t *testing.T) {
+	mgr := testManager(t, []*Model{{Name: "alpha"}}, nil)
+	filePort := mgr.Config().MonitorPort
+	flagPort := freePort(t)
+	overrideManager(t, mgr, flagPort, 0, "")
+
+	res, err := mgr.Reload()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := mgr.Config().MonitorPort; got != flagPort {
+		t.Errorf("monitor_port after the reload = %d, want the override %d", got, flagPort)
+	}
+	if res.PortsMoved {
+		t.Error("the reload asked to move the listeners although nothing moved")
+	}
+	if res.MonitorPort != flagPort {
+		t.Errorf("the reload reported port %d, want %d", res.MonitorPort, flagPort)
+	}
+	// The file itself must still carry its own port, untouched by all this.
+	onDisk, err := LoadConfig(mgr.Config().Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if onDisk.MonitorPort != filePort {
+		t.Errorf("monitor_port in the file = %d, want %d", onDisk.MonitorPort, filePort)
+	}
+}
+
+// The page saves its settings form over and over; none of those saves may
+// bake the override into the file, and the live port must not budge.
+func TestSettingsSaveDoesNotBakeInTheOverride(t *testing.T) {
+	mgr := testManager(t, []*Model{{Name: "alpha"}}, nil)
+	filePort, fileRouter := mgr.Config().MonitorPort, mgr.Config().RouterPort
+	flagPort := freePort(t)
+	overrideManager(t, mgr, flagPort, 0, "")
+
+	// What the page submits: the values it was shown, with one unrelated
+	// field changed.
+	shown := mgr.Config()
+	res, err := mgr.UpdateSettings(SettingsInput{
+		MonitorPort: shown.MonitorPort,
+		RouterPort:  shown.RouterPort,
+		Host:        shown.Host,
+		LogLines:    256,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.PortsMoved {
+		t.Error("an unrelated settings save asked to move the listeners")
+	}
+	if got := mgr.Config().MonitorPort; got != flagPort {
+		t.Errorf("the override stopped applying after a save: %d, want %d", got, flagPort)
+	}
+	onDisk, err := LoadConfig(mgr.Config().Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if onDisk.MonitorPort != filePort || onDisk.RouterPort != fileRouter {
+		t.Errorf("the save baked the override into the file: %d %d, want %d %d",
+			onDisk.MonitorPort, onDisk.RouterPort, filePort, fileRouter)
+	}
+	if onDisk.LogLines != 256 {
+		t.Errorf("the save lost the real edit: log_lines = %d", onDisk.LogLines)
+	}
+}

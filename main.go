@@ -12,6 +12,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 )
@@ -65,15 +66,10 @@ func main() {
 	if err != nil {
 		die("%v", err)
 	}
-	if *monitorPort != 0 {
-		cfg.MonitorPort = *monitorPort
-	}
-	if *routerPort != 0 {
-		cfg.RouterPort = *routerPort
-	}
-	if *host != "" {
-		cfg.Host = *host
-	}
+	// LoadConfig has already validated the file on its own; validate again
+	// with the flags layered on, because an override can collide with a port
+	// the file is happy with.
+	cfg.Overrides(*monitorPort, *routerPort, *host)
 	if err := cfg.Validate(); err != nil {
 		die("%v", err)
 	}
@@ -118,6 +114,11 @@ func main() {
 	mgr.Log().System(fmt.Sprintf("llm-pivot %s started; configuration %s", Version, cfg.Path()))
 	mgr.Log().System(fmt.Sprintf("monitor page on port %d, OpenAI router on port %d",
 		cfg.MonitorPort, cfg.RouterPort))
+	// The page would otherwise show a value that is nowhere in the file.
+	if over := cfg.overridden(); len(over) > 0 {
+		mgr.Log().System(fmt.Sprintf("%s overridden on the command line for this run; %s keeps its own value",
+			strings.Join(over, " and "), cfg.Path()))
+	}
 	log.Printf("configuration %s (%d engine(s), %d model(s))",
 		cfg.Path(), len(cfg.Engines), countModels(cfg))
 
