@@ -16,6 +16,8 @@ was running before.
 
 llm-pivot is mostly written by Claude Opus 5.
 
+![Monitor page](Monitor-Page.png)
+
 ---
 
 ## Contents
@@ -250,10 +252,6 @@ the listeners immediately — no restart, and the running engine is untouched.
 
 > Bind address defaults to `127.0.0.1`. Use `0.0.0.0` only if you want the
 > page and router reachable from the network — neither has authentication.
-
-### Monitor page example
-
-![Monitor page](Monitor-Page.png)
 
 ---
 
