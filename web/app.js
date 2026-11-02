@@ -111,15 +111,19 @@ function renderTop() {
 
 function modelLight(name) {
   const st = S.status || {};
-  if (st.model !== name) return 'light';
-  return lightClass(st.state);
+  if (st.model === name) return lightClass(st.state);
+  // The engine that died is gone from st.model; its failure still belongs to
+  // the model it was serving, and that model's light stays red until it is
+  // started again.
+  if (st.state === 'failed' && st.failed_model === name) return 'light failed';
+  return 'light';
 }
 
 function renderTree() {
   const c = S.cfg;
   if (!c) return;
   const st = S.status || {};
-  const sig = JSON.stringify([c.engines, st.model, st.state, S.sel]);
+  const sig = JSON.stringify([c.engines, st.model, st.failed_model, st.state, S.sel]);
   if (sig === S.treeSig) return;
   S.treeSig = sig;
 
@@ -584,7 +588,9 @@ function refreshModelControls() {
           <span><b>Uptime</b><span class="v">${esc(humanAge(st.uptime_seconds))}</span></span>
           <span><b>Monitor</b><span class="v">${esc(st.monitor_mode || '—')}</span></span>
         </div>`;
-    } else if (st.state === 'failed' && st.last_error && st.model === name) {
+    } else if (st.state === 'failed' && st.last_error && st.failed_model === name) {
+      // The dead engine is no longer st.model, so the card is keyed on the
+      // failure itself: only the model whose engine broke shows this banner.
       statusBox.innerHTML = `<div class="banner error">${esc(st.last_error)}</div>`;
     } else {
       statusBox.innerHTML = '';

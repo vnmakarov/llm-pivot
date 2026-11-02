@@ -70,20 +70,25 @@ type MonitorSnapshot struct {
 
 // Status is the runtime half of what the monitor page displays.
 type Status struct {
-	State       string           `json:"state"`
-	Engine      string           `json:"engine"`
-	Model       string           `json:"model"`
-	Port        int              `json:"port"`
-	PID         int              `json:"pid"`
-	Command     string           `json:"command"`
-	StartedAt   string           `json:"started_at"`
-	UptimeSec   int64            `json:"uptime_seconds"`
-	Healthy     bool             `json:"healthy"`
-	LastError   string           `json:"last_error"`
-	MonitorMode string           `json:"monitor_mode"`
-	MonitorURL  string           `json:"monitor_url"`
-	Monitor     *MonitorSnapshot `json:"monitor"`
-	RouterURL   string           `json:"router_url"`
+	State     string `json:"state"`
+	Engine    string `json:"engine"`
+	Model     string `json:"model"`
+	Port      int    `json:"port"`
+	PID       int    `json:"pid"`
+	Command   string `json:"command"`
+	StartedAt string `json:"started_at"`
+	UptimeSec int64  `json:"uptime_seconds"`
+	Healthy   bool   `json:"healthy"`
+	LastError string `json:"last_error"`
+	// FailedEngine/FailedModel name the engine and model the last failure
+	// belongs to: the process is gone, so inst can no longer name them, and
+	// without them the page cannot say which model turned red.
+	FailedEngine string           `json:"failed_engine"`
+	FailedModel  string           `json:"failed_model"`
+	MonitorMode  string           `json:"monitor_mode"`
+	MonitorURL   string           `json:"monitor_url"`
+	Monitor      *MonitorSnapshot `json:"monitor"`
+	RouterURL    string           `json:"router_url"`
 }
 
 // Manager owns the configuration and the single engine process that may run
@@ -91,13 +96,16 @@ type Status struct {
 type Manager struct {
 	opMu sync.Mutex // serialises whole start/stop sequences
 
-	mu       sync.RWMutex
-	cfg      *Config
-	inst     *instance
-	state    string
-	lastErr  string
-	snap     *MonitorSnapshot
-	inflight int // requests being proxied right now
+	mu      sync.RWMutex
+	cfg     *Config
+	inst    *instance
+	state   string
+	lastErr string
+	// failedEngine/failedModel carry the same attribution as Status: the
+	// failed model is not the running one, and inst cannot name it any more.
+	failedEngine, failedModel string
+	snap                      *MonitorSnapshot
+	inflight                  int // requests being proxied right now
 
 	log    *LogBuffer
 	client *http.Client
@@ -145,6 +153,12 @@ func (m *Manager) Status() Status {
 		if e := m.cfg.Engine(in.engine); e != nil {
 			st.MonitorMode = e.MonitorMode()
 		}
+	}
+	// A failed engine left m.inst, so without this half of the answer every
+	// model looks idle: its light stays grey and its card shows no error.
+	if m.state == StateFailed {
+		st.FailedEngine = m.failedEngine
+		st.FailedModel = m.failedModel
 	}
 	return st
 }
@@ -283,7 +297,7 @@ func (m *Manager) startLocked(model string) error {
 
 	argv, err := buildArgv(eng, mdl)
 	if err != nil {
-		m.fail(fmt.Sprintf("cannot build command for model %q: %v", model, err))
+		m.fail(fmt.Sprintf("cannot build command for model %q: %v", model, err), eng.Name, model)
 		return err
 	}
 
@@ -301,7 +315,7 @@ func (m *Manager) startLocked(model string) error {
 	// Refuse to start on top of something that already holds the port.
 	if err := waitPortFree(eng.Port, 3*time.Second); err != nil {
 		m.log.System("✗ " + err.Error())
-		m.fail(err.Error())
+		m.fail(err.Error(), eng.Name, model)
 		return err
 	}
 
@@ -319,14 +333,14 @@ func (m *Manager) startLocked(model string) error {
 
 	outR, outW, err := os.Pipe()
 	if err != nil {
-		m.fail(err.Error())
+		m.fail(err.Error(), eng.Name, model)
 		return err
 	}
 	errR, errW, err := os.Pipe()
 	if err != nil {
 		outR.Close()
 		outW.Close()
-		m.fail(err.Error())
+		m.fail(err.Error(), eng.Name, model)
 		return err
 	}
 	cmd.Stdout = outW
@@ -340,7 +354,7 @@ func (m *Manager) startLocked(model string) error {
 		errW.Close()
 		msg := fmt.Sprintf("cannot start engine %q: %v", eng.Name, err)
 		m.log.System(msg)
-		m.fail(msg)
+		m.fail(msg, eng.Name, model)
 		return fmt.Errorf("%s", msg)
 	}
 	// The child holds its own copies now.
@@ -386,7 +400,7 @@ func (m *Manager) startLocked(model string) error {
 	if err := m.waitHealthy(in, eng.HealthPath, time.Duration(timeout)*time.Second); err != nil {
 		m.log.System("✗ " + err.Error())
 		m.stopLocked("startup failed")
-		m.fail(err.Error())
+		m.fail(err.Error(), eng.Name, model)
 		return err
 	}
 
@@ -432,6 +446,8 @@ func (m *Manager) reap(in *instance) {
 			m.inst = nil
 			m.state = StateFailed
 			m.lastErr = fmt.Sprintf("engine %q for model %q died: %s", in.engine, in.model, in.exitInfo)
+			m.failedEngine = in.engine
+			m.failedModel = in.model
 		}
 		m.mu.Unlock()
 	}
@@ -494,10 +510,14 @@ func signalGroup(pid int, sig syscall.Signal) {
 	}
 }
 
-func (m *Manager) fail(msg string) {
+// fail records a failure and what it belongs to. The model may never have run
+// at all (a start that never bound its port), so inst is no way to find it.
+func (m *Manager) fail(msg, engine, model string) {
 	m.mu.Lock()
 	m.state = StateFailed
 	m.lastErr = msg
+	m.failedEngine = engine
+	m.failedModel = model
 	m.mu.Unlock()
 }
 

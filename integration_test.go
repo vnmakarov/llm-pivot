@@ -73,6 +73,17 @@ func TestHelperEngine(t *testing.T) {
 	})
 	srv := &http.Server{Addr: "127.0.0.1:" + port, Handler: mux}
 
+	// ER_FAKE_EXIT_MS stands in for an engine that starts fine and then dies
+	// on its own: /health answers first, so llm-pivot must learn about it from
+	// the reaper rather than from a failed start.
+	if died, _ := strconv.Atoi(os.Getenv("ER_FAKE_EXIT_MS")); died > 0 {
+		go func() {
+			time.Sleep(time.Duration(died) * time.Millisecond)
+			srv.Close()
+			os.Exit(7)
+		}()
+	}
+
 	// Exit cleanly on the SIGTERM llm-pivot sends.
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGTERM, syscall.SIGINT)
@@ -231,8 +242,48 @@ func TestManagerReportsStartupFailure(t *testing.T) {
 	if !strings.Contains(err.Error(), "exited during startup") {
 		t.Errorf("unhelpful error: %v", err)
 	}
-	if st := mgr.Status(); st.State != StateFailed || st.LastError == "" {
+	st := mgr.Status()
+	if st.State != StateFailed || st.LastError == "" {
 		t.Errorf("status after failure: %+v", st)
+	}
+	// The engine never bound its port, so no instance exists to name it: only
+	// failed_engine/failed_model can tell the page which model to light red.
+	if st.Model != "" || st.FailedModel != "alpha" || st.FailedEngine != "fake" {
+		t.Errorf("failure not attributed to alpha: %+v", st)
+	}
+}
+
+// The engine that dies after coming up leaves no instance behind, and the
+// failure must still be pinned to the model it was serving.
+func TestDeathWhileRunningNamedTheModel(t *testing.T) {
+	mgr := testManager(t, []*Model{{Name: "alpha"}}, func(e *Engine) {
+		e.Env = append(e.Env, "ER_FAKE_EXIT_MS=1500")
+	})
+	if err := mgr.Start("alpha"); err != nil {
+		t.Fatalf("Start: %v", err) // the engine answers /health before it dies
+	}
+
+	deadline := time.Now().Add(15 * time.Second)
+	var st Status
+	for {
+		st = mgr.Status()
+		if st.State == StateFailed {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the death was never reported: %+v", st)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if st.Model != "" {
+		// The process is gone, so Status.model must go back to nothing.
+		t.Errorf("a dead engine must not be reported as running: %+v", st)
+	}
+	if st.FailedModel != "alpha" || st.FailedEngine != "fake" {
+		t.Errorf("death not attributed to alpha: %+v", st)
+	}
+	if !strings.Contains(st.LastError, "died") {
+		t.Errorf("unhelpful error: %q", st.LastError)
 	}
 }
 
