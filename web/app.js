@@ -713,10 +713,30 @@ async function loadEffectiveCommand(name) {
 
 /* ---------------------------------------------------------------- monitor */
 
+/* Following the output means keeping the end of it in view for someone who
+   is already watching the end of it. Anyone who has scrolled up is reading
+   something, and the view must stay where they put it until they come back
+   down. Every place that would move the log has to ask first, which is why
+   the question lives here and not inline. The slack is for a last line only
+   part-way into its row: without it, following would stop as soon as the
+   text did not divide evenly into the box. */
+const LOG_BOTTOM_SLACK = 40;
+
+function logFollowing() {
+  const pre = $('logview');
+  if (!pre || !$('follow').checked) return false;
+  return pre.scrollTop + pre.clientHeight >= pre.scrollHeight - LOG_BOTTOM_SLACK;
+}
+
+function logToBottom() {
+  const pre = $('logview');
+  if (pre) pre.scrollTop = pre.scrollHeight;
+}
+
 function appendLines(lines) {
   const pre = $('logview');
-  const follow = $('follow').checked;
-  const atBottom = pre.scrollTop + pre.clientHeight >= pre.scrollHeight - 40;
+  // Asked before the lines go in, since adding them is what changes it.
+  const following = logFollowing();
   const frag = document.createDocumentFragment();
   for (const l of lines) {
     const div = document.createElement('div');
@@ -728,7 +748,7 @@ function appendLines(lines) {
   }
   pre.appendChild(frag);
   trimLog();
-  if (follow && atBottom) pre.scrollTop = pre.scrollHeight;
+  if (following) logToBottom();
 }
 
 /* The view keeps what the log buffer keeps. Hard-coding a limit here made
@@ -851,10 +871,14 @@ function monitorMax() {
 
 function setMonitorHeight(px) {
   const h = Math.round(Math.min(Math.max(px, MONITOR_MIN), monitorMax()));
+  // Asked before the resize, since resizing is what changes the answer.
+  const following = logFollowing();
   document.documentElement.style.setProperty('--monitor-h', h + 'px');
-  // Keep the newest output in view while the pane grows or shrinks.
-  const pre = $('logview');
-  if (pre && $('follow').checked) pre.scrollTop = pre.scrollHeight;
+  // Keep the newest output in view while the pane grows or shrinks - but
+  // only for someone already watching it. This runs on every refresh, by
+  // way of renderDetail and fitMonitor, so re-pinning unconditionally put
+  // the view back at the end about a second after every scroll up.
+  if (following) logToBottom();
 }
 
 // fitMonitor gives the monitor every pixel the form above does not need, so
@@ -930,6 +954,12 @@ function init() {
   });
   $('item-settings').onclick = () => select({ kind: 'settings' });
   $('btn-add-engine').onclick = () => select({ kind: 'new-engine' });
+  // Ticking Follow means "take me to the end and keep me there". That used
+  // to happen by itself, because the pane was re-pinned on every refresh
+  // whatever the view was showing; now that it is not, the box has to say so.
+  $('follow').onchange = () => {
+    if ($('follow').checked) logToBottom();
+  };
   $('btn-clear-log').onclick = async () => {
     try {
       await api('POST', '/api/log/clear');
