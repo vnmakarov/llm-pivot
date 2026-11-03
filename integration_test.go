@@ -1762,3 +1762,76 @@ func TestEngineFrameOnlyForEmbedEngines(t *testing.T) {
 		t.Errorf("a stdio-monitored engine offered a frame target: %q", target)
 	}
 }
+
+// An engine that loads a model binds its port long after its process
+// exists, and the frame used to be pointed at it the whole time: llm-pivot
+// dialled a port nothing was listening on yet and the frame filled with a
+// connection-refused error for the length of the load.
+func TestEngineFrameWaitsForTheEngineToAnswer(t *testing.T) {
+	mgr := testManager(t, []*Model{{Name: "alpha"}}, func(e *Engine) {
+		e.Monitor = MonitorEmbed
+		e.MonitorURL = "http://{{host}}:{{port}}/ui/#live"
+		e.Env = append(e.Env, "ER_FAKE_DELAY_MS=2500") // a slow load
+	})
+	srv := httptest.NewServer(NewAPI(mgr, func(string, int, int) {}))
+	defer srv.Close()
+
+	started := make(chan error, 1)
+	go func() { started <- mgr.Start("alpha") }()
+
+	// Catch it while the process is up but the port is not open yet.
+	var saw bool
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		st := mgr.Status()
+		if st.State != StateStarting || st.PID == 0 {
+			time.Sleep(50 * time.Millisecond)
+			continue
+		}
+		saw = true
+		// The page keys the frame on this, so it must say "not yet".
+		if st.Healthy {
+			t.Fatalf("an engine that has not answered is reported healthy: %+v", st)
+		}
+		if target := mgr.EmbedTarget(); target != nil {
+			t.Errorf("a frame target was offered before the engine answered: %q", target)
+		}
+		resp, err := http.Get(srv.URL + "/engine/ui/")
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusServiceUnavailable {
+			t.Errorf("/engine/ while starting answered %d, want 503: %s", resp.StatusCode, body)
+		}
+		if strings.Contains(string(body), "connection refused") {
+			t.Errorf("the frame was shown a dial error: %s", body)
+		}
+		// Whatever it says has to be readable in a frame, which renders it.
+		if ct := resp.Header.Get("Content-Type"); !strings.HasPrefix(ct, "text/html") {
+			t.Errorf("the frame was sent %q, which a browser renders as it comes", ct)
+		}
+		if !strings.Contains(string(body), "still starting") {
+			t.Errorf("the message does not say what is going on: %s", body)
+		}
+		break
+	}
+	if !saw {
+		t.Fatal("never caught the engine between spawning and answering")
+	}
+
+	if err := <-started; err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	// And once it answers, the real page comes through.
+	resp, err := http.Get(srv.URL + "/engine/ui/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK || !strings.Contains(string(body), "alpha") {
+		t.Errorf("after the engine answered: %d %s", resp.StatusCode, body)
+	}
+}

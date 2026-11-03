@@ -233,6 +233,11 @@ same origin the page was loaded from and therefore always reachable. Only the
 monitor port has to be reachable — the engine can stay on loopback, and
 `monitor_url` may name any address the llm-pivot machine can reach.
 
+The frame waits for the engine to answer. An engine loading a model binds
+its port long after its process exists, so until the state is `running` the
+frame says it is still starting rather than showing a dial error — the
+**Process output** tab is where the load itself is visible.
+
 Everything below `/engine/` is forwarded, so a page built from relative links
 works unchanged. A page that loads sub-resources by absolute path (`/app.js`)
 does not: those escape the prefix and hit llm-pivot's own page instead.

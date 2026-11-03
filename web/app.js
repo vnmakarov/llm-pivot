@@ -753,12 +753,17 @@ function renderMonitor() {
   else if (S.monitorTab !== 'log') S.monitorTab = 'engine';
 
   const showEngine = hasOwnView && S.monitorTab === 'engine';
-  const showEmbed = showEngine && mode === 'embed';
-  $('httpview').hidden = !(showEngine && mode === 'http');
-  $('embedview').hidden = !showEmbed;
+  // An engine has a page to frame only once it answers. The instance
+  // exists from the moment the process is spawned, but one loading a model
+  // binds its port minutes later, and llm-pivot - which fetches the page -
+  // gets a connection refused until it does.
+  const framed = showEngine && mode === 'embed' && st.healthy;
+  const waiting = showEngine && mode === 'embed' && !st.healthy;
+  $('httpview').hidden = !(showEngine && mode === 'http') && !waiting;
+  $('embedview').hidden = !framed;
   $('logview').hidden = showEngine;
-  $('btn-reload-embed').hidden = !showEmbed;
-  $('btn-open-embed').hidden = !showEmbed;
+  $('btn-reload-embed').hidden = !framed;
+  $('btn-open-embed').hidden = !framed;
   $('btn-clear-log').hidden = showEngine && mode === 'embed';
   $('follow').parentElement.hidden = showEngine;
 
@@ -778,7 +783,16 @@ function renderMonitor() {
   $('monitor-title').textContent = title;
   $('monitor-meta').textContent = meta;
 
-  if (mode === 'embed') renderEmbed(st);
+  // Dropping the frame's address while the engine is down also means it is
+  // loaded afresh when the engine comes back, rather than left on a page
+  // the engine no longer serves.
+  if (mode === 'embed') renderEmbed(framed ? st : {});
+  if (waiting) {
+    $('httpview').textContent = st.state === 'starting'
+      ? `${st.engine} is still starting. Its page appears here as soon as it answers;\n` +
+        'the Process output tab shows how far it has got.'
+      : `${st.engine} is not answering on port ${st.port || '—'} yet.`;
+  }
   if (showEngine && mode === 'http') {
     const m = st.monitor;
     const view = $('httpview');

@@ -187,7 +187,10 @@ func (m *Manager) EmbedTarget() *url.URL {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	in := m.inst
-	if in == nil || in.monitorURL == "" {
+	// Not before the engine answers: the instance exists from the moment
+	// the process is spawned, but an engine loading a model binds its port
+	// minutes later, and dialling it until then is a connection refused.
+	if in == nil || in.monitorURL == "" || !in.healthy || !in.alive() {
 		return nil
 	}
 	if e := m.cfg.Engine(in.engine); e == nil || e.MonitorMode() != MonitorEmbed {

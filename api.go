@@ -3,6 +3,8 @@ package main
 import (
 	"embed"
 	"encoding/json"
+	"fmt"
+	"html"
 	"io/fs"
 	"net/http"
 	"net/http/httputil"
@@ -91,6 +93,21 @@ func readOnly(h http.Handler) http.Handler {
 	})
 }
 
+// writeFrameError answers inside the monitoring frame, where a browser
+// renders whatever comes back as a document: JSON there is a wall of
+// punctuation across an otherwise empty panel.
+func writeFrameError(w http.ResponseWriter, code int, title, detail string) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(code)
+	fmt.Fprintf(w, `<!doctype html><meta charset="utf-8"><title>%s</title>
+<body style="margin:0;padding:24px;font:14px/1.6 system-ui,sans-serif;
+             color:#c9d1d9;background:#0d1117">
+<p style="margin:0 0 6px;font-weight:600">%s</p>
+<p style="margin:0;color:#8b949e">%s</p>
+</body>`, html.EscapeString(title), html.EscapeString(title), html.EscapeString(detail))
+}
+
 // engineFrame proxies the running engine's own monitoring page, so that the
 // browser loads it from llm-pivot rather than having to reach the engine
 // itself - which it generally cannot: the engine listens on llm-pivot's
@@ -99,8 +116,19 @@ func readOnly(h http.Handler) http.Handler {
 func (a *API) engineFrame(w http.ResponseWriter, r *http.Request) {
 	target := a.mgr.EmbedTarget()
 	if target == nil {
-		writeError(w, http.StatusServiceUnavailable,
-			"no engine with a framed monitoring page is running")
+		st := a.mgr.Status()
+		switch {
+		case st.State == StateStarting:
+			writeFrameError(w, http.StatusServiceUnavailable, "The engine is still starting.",
+				"Its page will appear here as soon as it answers.")
+		case st.State == StateFailed:
+			writeFrameError(w, http.StatusServiceUnavailable, "The engine failed.",
+				st.LastError)
+		default:
+			writeFrameError(w, http.StatusServiceUnavailable,
+				"No engine with a framed monitoring page is running.",
+				"Start one from the left pane.")
+		}
 		return
 	}
 	proxy := &httputil.ReverseProxy{
@@ -114,8 +142,12 @@ func (a *API) engineFrame(w http.ResponseWriter, r *http.Request) {
 			if r.Context().Err() != nil {
 				return // the browser went away
 			}
-			writeError(w, http.StatusBadGateway,
-				"the engine's monitoring page did not answer: "+err.Error())
+			// Say who dialled what: the address is on the llm-pivot
+			// machine, not on the one reading this, and that is the first
+			// thing anyone looking at it needs to know.
+			writeFrameError(w, http.StatusBadGateway,
+				"The engine's monitoring page did not answer.",
+				fmt.Sprintf("llm-pivot tried %s on its own machine and got: %v", target, err))
 		},
 	}
 	proxy.ServeHTTP(w, r)
