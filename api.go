@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io/fs"
 	"net/http"
+	"net/http/httputil"
 	"strconv"
 	"strings"
 	"time"
@@ -42,7 +43,21 @@ func NewAPI(mgr *Manager, rebind func(string, int, int)) http.Handler {
 	files := http.FileServer(http.FS(sub))
 
 	mux := http.NewServeMux()
-	mux.Handle("GET /", noCache(files))
+	// The page's own files answer GET and HEAD; anything else addressed to
+	// them is a mistake, and saying so is better than handing back the page.
+	// The pattern carries no method because "GET /" and "/engine/" overlap
+	// without either being the more specific, which ServeMux refuses.
+	mux.Handle("/", noCache(readOnly(files)))
+	// The running engine's own monitoring page, fetched by llm-pivot and
+	// served from here so that the browser never has to reach the engine.
+	// Everything below the prefix is forwarded, so the page's relative
+	// links, stylesheets and XHRs resolve against it and keep working.
+	mux.Handle("/engine/", http.StripPrefix("/engine", http.HandlerFunc(a.engineFrame)))
+	mux.HandleFunc("/engine", func(w http.ResponseWriter, r *http.Request) {
+		// Without the trailing slash the page's relative links would
+		// resolve against "/" and escape the proxy.
+		http.Redirect(w, r, "/engine/", http.StatusTemporaryRedirect)
+	})
 	mux.HandleFunc("GET /api/state", a.state)
 	mux.HandleFunc("GET /api/command", a.command)
 	mux.HandleFunc("PUT /api/settings", a.settings)
@@ -61,6 +76,49 @@ func noCache(h http.Handler) http.Handler {
 		w.Header().Set("Cache-Control", "no-store")
 		h.ServeHTTP(w, r)
 	})
+}
+
+// readOnly refuses anything but a read on the static page files, which the
+// file server would otherwise answer whatever the method.
+func readOnly(h http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+			w.Header().Set("Allow", "GET, HEAD")
+			writeError(w, http.StatusMethodNotAllowed, "only GET and HEAD are served here")
+			return
+		}
+		h.ServeHTTP(w, r)
+	})
+}
+
+// engineFrame proxies the running engine's own monitoring page, so that the
+// browser loads it from llm-pivot rather than having to reach the engine
+// itself - which it generally cannot: the engine listens on llm-pivot's
+// loopback, and that is a different machine's loopback in any browser not
+// running on this one.
+func (a *API) engineFrame(w http.ResponseWriter, r *http.Request) {
+	target := a.mgr.EmbedTarget()
+	if target == nil {
+		writeError(w, http.StatusServiceUnavailable,
+			"no engine with a framed monitoring page is running")
+		return
+	}
+	proxy := &httputil.ReverseProxy{
+		Rewrite: func(pr *httputil.ProxyRequest) {
+			// SetURL joins the target's origin with the path left by
+			// StripPrefix, and points the Host header at the engine.
+			pr.SetURL(target)
+		},
+		FlushInterval: -1, // a monitoring page may well stream
+		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
+			if r.Context().Err() != nil {
+				return // the browser went away
+			}
+			writeError(w, http.StatusBadGateway,
+				"the engine's monitoring page did not answer: "+err.Error())
+		},
+	}
+	proxy.ServeHTTP(w, r)
 }
 
 func (a *API) state(w http.ResponseWriter, r *http.Request) {

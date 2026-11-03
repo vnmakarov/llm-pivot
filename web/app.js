@@ -795,9 +795,26 @@ function renderMonitor() {
 // renderEmbed points the frame at the engine's own monitoring page. The src
 // is assigned only when it actually changes: re-assigning it on every poll
 // would reload the page once a second and throw away its state.
+/* Where the frame loads the engine's page from. Not monitor_url: that
+   names the engine on llm-pivot's loopback, and a browser resolves it
+   against its own machine instead - so viewed from anywhere but the
+   llm-pivot box it framed the wrong host entirely, or nothing at all.
+   llm-pivot proxies the page under /engine/, which is same-origin with
+   this one and therefore reachable by definition. The path and fragment
+   are kept so that monitor_url can still point into the page. */
+function embedSrc(monitorURL) {
+  if (!monitorURL) return '';
+  try {
+    const u = new URL(monitorURL, location.href);
+    return '/engine' + u.pathname + u.search + u.hash;
+  } catch (e) {
+    return '';
+  }
+}
+
 function renderEmbed(st) {
   const frame = $('embedview');
-  const want = st.monitor_url || '';
+  const want = embedSrc(st.monitor_url);
   if (frame.dataset.src === want) return;
   frame.dataset.src = want;
   if (want) {

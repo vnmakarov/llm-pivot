@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -66,6 +67,16 @@ func TestHelperEngine(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		io.WriteString(w, `{"status":"ok"}`)
+	})
+	// A framed monitoring page, written the way real ones are: every link
+	// relative, so it only works if whatever serves it keeps the prefix.
+	mux.HandleFunc("/ui/", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		fmt.Fprintf(w, `<html><script src="assets/app.js"></script>%s</html>`, tag)
+	})
+	mux.HandleFunc("/ui/assets/app.js", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/javascript")
+		fmt.Fprintf(w, "// the framed page's own script for %s\n", tag)
 	})
 	mux.HandleFunc("/metrics", func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(w, "engine_tag{tag=%q} 1\n", tag)
@@ -1652,5 +1663,102 @@ func TestHostPlaceholderIsAlwaysTheEngineAddress(t *testing.T) {
 	}
 	if argv[2] != engineHost {
 		t.Errorf("--host expanded to %q, want %q", argv[2], engineHost)
+	}
+}
+
+// ------------------------------------------------- the framed engine page
+
+// monitor: embed used to put monitor_url straight into the frame. That
+// address is the engine as llm-pivot reaches it - on llm-pivot's loopback -
+// so a browser anywhere else resolved it against its own machine and framed
+// that one's port instead. llm-pivot has to fetch the page itself and serve
+// it from the origin the browser already has.
+func TestEngineFrameIsServedByLlmPivot(t *testing.T) {
+	mgr := testManager(t, []*Model{{Name: "alpha"}}, func(e *Engine) {
+		e.Monitor = MonitorEmbed
+		e.MonitorURL = "http://{{host}}:{{port}}/ui/#live"
+	})
+	srv := httptest.NewServer(NewAPI(mgr, func(string, int, int) {}))
+	defer srv.Close()
+
+	get := func(path string) (int, string) {
+		t.Helper()
+		resp, err := http.Get(srv.URL + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		body, _ := io.ReadAll(resp.Body)
+		return resp.StatusCode, string(body)
+	}
+
+	// Nothing is running yet, so there is no page to frame.
+	if code, _ := get("/engine/"); code != http.StatusServiceUnavailable {
+		t.Errorf("with no engine running /engine/ answered %d, want 503", code)
+	}
+	if err := mgr.Start("alpha"); err != nil {
+		t.Fatal(err)
+	}
+
+	code, body := get("/engine/ui/")
+	if code != http.StatusOK {
+		t.Fatalf("/engine/ui/ answered %d: %s", code, body)
+	}
+	if !strings.Contains(body, "alpha") {
+		t.Errorf("the framed page did not come from the engine: %q", body)
+	}
+	// The page's relative script resolves under the prefix, which is the
+	// whole reason the proxy forwards everything below it.
+	code, body = get("/engine/ui/assets/app.js")
+	if code != http.StatusOK || !strings.Contains(body, "the framed page's own script") {
+		t.Errorf("the page's own script was not reachable: %d %q", code, body)
+	}
+
+	// llm-pivot's own page must still be its own.
+	if code, body = get("/"); code != http.StatusOK || !strings.Contains(body, "<html") {
+		t.Errorf("the monitor page itself broke: %d", code)
+	}
+	if code, body = get("/app.js"); code != http.StatusOK || strings.Contains(body, "framed page") {
+		t.Errorf("/app.js no longer serves llm-pivot's own script: %d", code)
+	}
+}
+
+// The frame's address is built from monitor_url, so a path and a fragment
+// in it still point where they used to - through the proxy.
+func TestEngineFrameKeepsThePathAndFragment(t *testing.T) {
+	mgr := testManager(t, []*Model{{Name: "alpha"}}, func(e *Engine) {
+		e.Monitor = MonitorEmbed
+		e.MonitorURL = "http://{{host}}:{{port}}/ui/#live"
+	})
+	if err := mgr.Start("alpha"); err != nil {
+		t.Fatal(err)
+	}
+	// What the page computes for the frame, and what the proxy maps it to.
+	got := mgr.Status().MonitorURL
+	u, err := url.Parse(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "/ui/"; u.Path != want || u.Fragment != "live" {
+		t.Fatalf("monitor_url = %q, want path %q and fragment \"live\"", got, want)
+	}
+	target := mgr.EmbedTarget()
+	if target == nil {
+		t.Fatal("no embed target for a running embed engine")
+	}
+	if target.Path != "" || target.Host != u.Host {
+		t.Errorf("the proxy target is %q, want just the origin of %q", target, got)
+	}
+}
+
+// Only an engine framing its page gets one proxied: a stdio-monitored one
+// has no page, and must not quietly expose its port through llm-pivot.
+func TestEngineFrameOnlyForEmbedEngines(t *testing.T) {
+	mgr := testManager(t, []*Model{{Name: "alpha"}}, nil) // stdio by default
+	if err := mgr.Start("alpha"); err != nil {
+		t.Fatal(err)
+	}
+	if target := mgr.EmbedTarget(); target != nil {
+		t.Errorf("a stdio-monitored engine offered a frame target: %q", target)
 	}
 }

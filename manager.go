@@ -6,6 +6,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"strconv"
@@ -170,6 +171,35 @@ func (m *Manager) Status() Status {
 		st.StartingEngine, st.StartingModel = m.startingEngine, m.startingModel
 	}
 	return st
+}
+
+// EmbedTarget is the origin of the running engine's framed monitoring page,
+// or nil when nothing is running under monitor: embed.
+//
+// The frame cannot simply load monitor_url. That address names the engine
+// as llm-pivot reaches it, on llm-pivot's own loopback; a browser given the
+// same address resolves it against the machine the browser runs on, which
+// is a different machine as soon as the page is viewed from anywhere else.
+// So llm-pivot fetches the page itself and serves it under /engine/, which
+// is the one origin the browser is certainly able to reach: the one it
+// loaded the monitor page from.
+func (m *Manager) EmbedTarget() *url.URL {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	in := m.inst
+	if in == nil || in.monitorURL == "" {
+		return nil
+	}
+	if e := m.cfg.Engine(in.engine); e == nil || e.MonitorMode() != MonitorEmbed {
+		return nil
+	}
+	u, err := url.Parse(in.monitorURL)
+	if err != nil || u.Host == "" {
+		return nil
+	}
+	// The origin only: the path comes from the request being proxied, so
+	// that the page's own relative links resolve against it.
+	return &url.URL{Scheme: u.Scheme, Host: u.Host}
 }
 
 // RunningTarget describes what the router should forward to. model is ""

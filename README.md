@@ -224,6 +224,19 @@ The **Effective command line** box shows exactly what will run after the merge.
 server-side, and a fragment never reaches a server. An engine that sends
 `X-Frame-Options: DENY` cannot be framed either — use `http` or **Open ↗**.
 
+**The framed page is proxied, never loaded directly.** `monitor_url` names
+the engine as llm-pivot reaches it, on llm-pivot's own loopback. A browser
+given that address resolves it against the machine *the browser* runs on, so
+viewing the page from anywhere else framed the wrong host. llm-pivot fetches
+the page itself and serves it at `/engine/` on the monitor port, which is the
+same origin the page was loaded from and therefore always reachable. Only the
+monitor port has to be reachable — the engine can stay on loopback, and
+`monitor_url` may name any address the llm-pivot machine can reach.
+
+Everything below `/engine/` is forwarded, so a page built from relative links
+works unchanged. A page that loads sub-resources by absolute path (`/app.js`)
+does not: those escape the prefix and hit llm-pivot's own page instead.
+
 ```yaml
 monitor: embed
 monitor_url: http://127.0.0.1:{{port}}/#monitor
@@ -490,6 +503,7 @@ scripted.
 | `DELETE /api/engines/{engine}/models/{model}` |                                                            |
 | `POST /api/control`                           | `{"action":"start"\|"stop"\|"restart","model":"<name>"}`   |
 | `POST /api/log/clear`                         | empties the monitoring buffer                              |
+| `GET /engine/…`                               | the running `embed` engine's own page, proxied             |
 
 Rejections come back as `{"error":"…"}` with a 4xx status.
 
