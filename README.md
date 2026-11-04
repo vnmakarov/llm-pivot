@@ -16,7 +16,9 @@ was running before.
 
 llm-pivot is mostly written by Claude Opus 5.
 
-![Monitor page](Monitor-Page.png)
+<a href="Monitor-Page.png">
+  <img src="Monitor-Page.png" alt="Click to enlarge">
+</a>
 
 ---
 
