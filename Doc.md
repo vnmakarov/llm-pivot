@@ -17,36 +17,28 @@ See [README.md](README.md) for an overview and screenshot.
 - [HTTP API](#http-api)
 - [Troubleshooting](#troubleshooting)
 
----
-
 ## Why
 
-My models do not all run on the same engine. Some want llama.cpp, some want
-strata or ninfer. Only one can hold the VRAM at a time, so every switch meant
-stopping one engine and starting another by hand, with the right flags. Each
-engine also reports status wherever it likes.
+Different models may need different engines, such as llama.cpp, strata or
+ninfer. When GPU memory only fits one model, switching requires stopping one
+engine and starting another with its model-specific options.
 
-llm-pivot solves both. One OpenAI port starts whichever engine serves the
-requested model, freeing the VRAM first. One page shows the output of whatever
-is running.
-
----
+llm-pivot handles that switch when a request names a model. Clients use one
+OpenAI-compatible endpoint, and the monitor page shows the active engine's
+status and output.
 
 ## Design notes
 
-- **One engine, one model, ever.** Every start path funnels through one lock
-  that stops the previous process first.
-- **Process groups.** Engines run in their own group and die with it.
-- **No starting on an occupied port.** A stranded engine would otherwise answer
-  the health probe and serve the wrong model.
-- **No deadline on generation.** The router sets no write timeout or upstream
-  response-header timeout. Incoming request headers have a 30-second timeout.
-- **Config is never mutated in place.** Each change is copied, validated,
-  written, then published.
-- **The page polls once a second** on one endpoint carrying status and new log
-  lines; forms are not re-rendered while you type.
-
----
+- A lock serializes engine starts. Each start stops the previous process.
+- Engines run in separate process groups so stop signals reach their children.
+- Before starting an engine, llm-pivot checks that its port is free. Otherwise,
+  an unrelated process could answer the health probe.
+- The router has no write timeout or upstream response-header timeout.
+  Incoming request headers have a 30-second timeout.
+- Configuration edits are copied, validated and written to disk before they
+  become active.
+- The page polls once a second for status and new log lines. Polling leaves
+  form inputs alone while you type.
 
 ## Install
 
@@ -69,16 +61,14 @@ configuration:
 Open <http://127.0.0.1:8061>. The generated configuration contains a sample
 llama.cpp engine with no models. Set its command to your engine executable and
 add a model before starting it. [config.example.yaml](config.example.yaml)
-shows llama.cpp and strata definitions. Executables can be found through `PATH`;
-for home-directory paths use `{{home}}` because `~` is not expanded.
+shows llama.cpp and strata definitions. Executables can be found through
+`PATH`; for home-directory paths use `{{home}}` because `~` is not expanded.
 
 Check a configuration without starting anything:
 
 ```sh
 ./llm-pivot -check
 ```
-
----
 
 ## Running under systemd (`--user`)
 
@@ -89,7 +79,7 @@ systemctl --user daemon-reload
 systemctl --user enable --now llm-pivot
 ```
 
-Everyday commands:
+To inspect or manage the service:
 
 ```sh
 systemctl --user status  llm-pivot
@@ -100,13 +90,11 @@ journalctl --user -u llm-pivot -f
 
 Keep it running without a login: `loginctl enable-linger $USER`.
 
-The unit assumes the binary at `~/GITHUB/llm-pivot/llm-pivot` and the config at
-`~/.config/llm-pivot/config.yaml`; edit `ExecStart` if yours differ.
+The unit assumes the binary at `~/GITHUB/llm-pivot/llm-pivot` and the config
+at `~/.config/llm-pivot/config.yaml`; edit `ExecStart` if yours differ.
 
-On stop, llm-pivot sends `SIGTERM` to the engine's process group, waits, then
-`SIGKILL`s it. No engine is left behind.
-
----
+On stop, llm-pivot sends `SIGTERM` to the engine's process group. If it does
+not exit within the graceful stop timeout, llm-pivot sends `SIGKILL`.
 
 ## Development
 
@@ -123,8 +111,6 @@ With Node.js installed, `go test` also runs the monitor scrolling tests in
 The end-to-end tests re-execute the test binary as a stand-in LLM engine,
 exercising real spawning, health waiting, killing, model switching, and the
 config editing API.
-
----
 
 ## The monitor page
 
@@ -159,22 +145,21 @@ light shows a model's run state:
 | ● red             | the engine failed or died |
 | ○ grey            | not running               |
 
-Click anything to open it on the right: **Settings**, an **engine**, a
-**model**, **+ (add engine)**, **Add model**.
+Select **Settings**, an engine or a model to open its form on the right. Use
+**+** to add an engine, or **Add model** under an engine to add a model.
 
 ### Right pane
 
-Two parts: the thing you clicked (its settings and buttons), and the live
-**Engine monitor** for whatever is running.
+The right pane contains the selected settings form and an **Engine monitor**
+for the active engine.
 
-On wide screens, the form and monitor scroll independently within a fixed
-page layout. The monitor output follows the newest line while **Follow** is
-ticked. Untick it to scroll back without being yanked forward. At widths of
-880 pixels or less, the page uses normal document scrolling.
+On wide screens, the form and monitor scroll independently within a fixed page
+layout. The monitor output follows the newest line while **Follow** is ticked.
+Untick it to read earlier output without automatic scrolling. At widths of 880
+pixels or less, the page uses normal document scrolling.
 
-The monitor takes every pixel the form does not need. Drag the grey handle
-between the two parts to overrule that. A dragged height holds while you stay
-on that page.
+The monitor fills the space below the form. Drag the grey handle to adjust its
+height. The height resets when you select another page.
 
 ### Adding an engine
 
@@ -184,8 +169,8 @@ Click **+** next to ENGINES:
 |--------------------------|-----------------------------------------------------------------------------------------------------|
 | **Name**                 | Shown in the left pane; must be unique.                                                             |
 | **Port**                 | The port the engine listens on. llm-pivot proxies to `127.0.0.1:<port>`. Must differ from the monitor and router ports. |
-| **Command**              | Program and default options, e.g. `/path/llama-server -ctx 64000`. Quoting is shell-like, but **no shell is involved**: no globbing, `~`, `$VAR`, or pipes. |
-| **Monitoring info from** | Where the right pane gets its content — see [Monitoring modes](#monitoring-modes).                  |
+| **Command**              | Program and default options, e.g. `/path/llama-server -ctx 64000`. Quoting is shell-like. Commands run without a shell: no globbing, `~`, `$VAR`, or pipes. |
+| **Monitoring info from** | Source of the monitor content; see [Monitoring modes](#monitoring-modes).                  |
 | **Monitor URL**          | For `http` and `embed` modes.                                                                       |
 | **Health path**          | Polled until it answers 2xx/3xx. Empty means "an open port is enough".                              |
 | **Port flag**            | Injected with the engine port unless already set (default `--port`). `-` disables.                  |
@@ -199,39 +184,35 @@ Click **Add model** under an engine:
 
 | Field                         | Meaning                                                                             |
 |-------------------------------|-------------------------------------------------------------------------------------|
-| **Model name**                | What OpenAI clients put in `"model"`. **Must be unique across every engine.**       |
-| **Additional engine options** | Extra flags for this model. A repeated flag **replaces** the engine's value for it. |
+| **Model name**                | What OpenAI clients put in `"model"`. Must be unique across all engines.       |
+| **Additional engine options** | Extra flags for this model. A repeated flag replaces the engine's value for it. |
 
-The **Effective command line** box shows exactly what will run after the merge.
+The **Effective command line** box shows the command after merging the saved
+engine and model options.
 
 ### Monitoring modes
 
 | `monitor:`          | The right pane shows                                | Use when                                   |
 |---------------------|-----------------------------------------------------|--------------------------------------------|
-| `stdio` *(default)* | the engine's stdout/stderr, live                    | the engine logs what you care about        |
+| `stdio` *(default)* | the engine's stdout/stderr, live                    | the engine reports status in its logs        |
 | `http`              | the body of `monitor_url`, re-fetched each interval | the engine exposes metrics as text or JSON |
 | `embed`             | `monitor_url` itself, rendered in a frame           | the engine has its own monitoring page     |
 
 `http` and `embed` get a second tab, **Process output**. `embed` also gets a
 **↻** button and **Open ↗**.
 
-**A `#fragment` only works with `embed`.** `http` mode fetches the URL
-server-side, and a fragment never reaches a server. An engine that sends
-`X-Frame-Options: DENY` cannot be framed either — use `http` or **Open ↗**.
+URL fragments such as `#monitor` work in `embed` mode. In `http` mode,
+llm-pivot fetches the URL server-side, where fragments have no effect. An
+engine that sends `X-Frame-Options: DENY` cannot be framed; use `http` or
+**Open ↗**.
 
-**The framed page is proxied, never loaded directly.** `monitor_url` names
-the engine as llm-pivot reaches it, on llm-pivot's own loopback. A browser
-given that address resolves it against the machine *the browser* runs on, so
-viewing the page from anywhere else framed the wrong host. llm-pivot fetches
-the page itself and serves it at `/engine/` on the monitor port, which is the
-same origin the page was loaded from and therefore always reachable. Only the
-monitor port has to be reachable — the engine can stay on loopback, and
-`monitor_url` may name any address the llm-pivot machine can reach.
+In `embed` mode, llm-pivot proxies `monitor_url` through `/engine/` on the
+monitor port. The browser only needs access to that port. This also lets a
+remote browser view an engine page hosted on the llm-pivot machine's loopback
+interface. The URL may point to any address reachable from that machine.
 
-The frame waits for the engine to answer. An engine loading a model binds
-its port long after its process exists, so until the state is `running` the
-frame says it is still starting rather than showing a dial error — the
-**Process output** tab is where the load itself is visible.
+The frame loads once the engine is `running`. While it starts, the frame shows
+a waiting message. Check **Process output** for startup logs.
 
 Everything below `/engine/` is forwarded, so a page built from relative links
 works unchanged. A page that loads sub-resources by absolute path (`/app.js`)
@@ -246,24 +227,26 @@ monitor_url: http://127.0.0.1:{{port}}/#monitor
 
 On a model page:
 
-- **Start** — kills any other engine first, then starts this one and waits for it to answer.
-- **Restart** — kills and starts the same model.
-- **Stop** — kills the running engine.
-- **Copy model** — adds `<name>-copy` with the options copied. Nothing starts or stops. Copying twice is refused.
+- **Start** stops the current engine, starts the selected model and waits for
+  its readiness probe to succeed.
+- **Restart** stops and starts the selected model.
+- **Stop** stops the current engine.
+- **Copy model** creates `<name>-copy` with the saved options. It leaves the
+  current engine running. The copy fails if that name already exists.
 
-Changing the active engine’s command, port, monitoring mode/URL, health path,
-port flag, working directory or environment stops it. Renaming or deleting
-the active engine/model, or changing the active model’s options, also stops
-it; start it again afterwards. Saving unchanged values or editing another
-model leaves it running. Startup timeout changes apply on the next start;
-HTTP polling interval changes also take effect on the next start.
+Changing the active engine's command, port, monitoring mode/URL, health path,
+port flag, working directory or environment stops it. Renaming or deleting the
+active engine/model, or changing the active model's options, also stops it;
+start it again afterwards. Saving unchanged values or editing another model
+leaves it running. Startup timeout changes apply on the next start; HTTP
+polling interval changes also take effect on the next start.
 
-An engine also stops by itself once `inactive_stop_timeout_seconds` passes with
-no proxied request, freeing the VRAM. Only proxied requests keep it alive;
-`/v1/models` and `/router/status` do not. A request in flight always counts.
-Set `-1` to disable automatic idle stopping. Inactivity is checked every
-30 seconds, so stopping can occur up to about 30 seconds after the timeout.
-An omitted or zero timeout uses the default of 600 seconds.
+An engine also stops by itself once `inactive_stop_timeout_seconds` passes
+with no proxied request, freeing the VRAM. Only proxied requests keep it
+alive; `/v1/models` and `/router/status` do not. A request in flight always
+counts. Set `-1` to disable automatic idle stopping. Inactivity is checked
+every 30 seconds, so stopping can occur up to about 30 seconds after the
+timeout. An omitted or zero timeout uses the default of 600 seconds.
 
 ### Settings
 
@@ -272,10 +255,8 @@ size. Saving a changed address or port reopens the affected listeners after
 the response; the running engine is untouched. Moving a listener can interrupt
 requests still using the old address after its three-second shutdown grace.
 
-> Bind address defaults to `127.0.0.1`. Use `0.0.0.0` only if you want the
-> page and router reachable from the network — neither has authentication.
-
----
+The bind address defaults to `127.0.0.1`. Setting it to `0.0.0.0` exposes both
+ports to the network. Neither port has authentication.
 
 ## Routing OpenAI requests
 
@@ -292,17 +273,15 @@ curl -s http://127.0.0.1:8078/v1/chat/completions \
   -d '{"model":"qwen3-30b","messages":[{"role":"user","content":"hello"}]}'
 ```
 
-What happens:
+The router reads the `"model"` field and looks up the configured model. If
+that model is already running, it forwards the request. Otherwise it stops the
+current engine, starts the requested model and waits for readiness before
+forwarding. An unknown model returns `404` with an OpenAI-shaped error and
+leaves the current engine running.
 
-1. Read the `"model"` field.
-2. Already running → forwarded as is.
-3. Different model running → its engine is killed, the right engine starts and
-   becomes healthy, then the request is forwarded.
-4. Not configured → `404`, OpenAI-shaped error; the running engine is left alone.
-
-The request path and body are forwarded without rewriting the configured
-model name, and streaming responses are flushed immediately. The engine must
-accept that model name itself if it validates the `"model"` field.
+The request path and body are forwarded without rewriting the configured model
+name, and streaming responses are flushed immediately. The engine must accept
+that model name itself if it validates the `"model"` field.
 
 Requests without a model go to the current engine. GET/HEAD bodies and bodies
 with a non-JSON Content-Type (such as multipart uploads) are not inspected.
@@ -312,11 +291,10 @@ A request for a different model stops the current engine even if it has
 requests in flight, so concurrent clients requesting different models can
 interrupt one another.
 
-Finding the `"model"` field means buffering the request body, which is capped
-at 64 MiB. A bigger body (inline base64 audio or images) is forwarded whole
-and untouched, but goes to whatever engine is running rather than switching
-models. Put `?model=<name>` in the query string to route it without the body
-being read at all.
+To find the `"model"` field, the router buffers up to 64 MiB of the body.
+Larger bodies are forwarded in full to the current engine without model
+inspection. For large requests, such as inline audio or images, use
+`?model=<name>` to select a model without inspecting the body.
 
 Two endpoints are answered by llm-pivot itself:
 
@@ -325,17 +303,17 @@ Two endpoints are answered by llm-pivot itself:
 | `GET /v1/models`     | Every configured model, each with `owned_by` (the engine) and `running`. |
 | `GET /router/status` | The runtime status the monitor page shows.                               |
 
-### Who answered? (`X-Llm-Pivot*`)
+### Response headers (`X-Llm-Pivot*`)
 
-Every reply carries headers saying where it came from:
+Router replies include these headers:
 
 | Header                 | On                        | Meaning                                         |
 |------------------------|---------------------------|-------------------------------------------------|
 | `X-Llm-Pivot`          | every reply               | the version                                     |
-| `X-Llm-Pivot-Upstream` | **proxied replies only**  | `<engine>/<model>:<port>` — the engine answered |
+| `X-Llm-Pivot-Upstream` | proxied replies only  | `<engine>/<model>:<port>` identifying the engine |
 
-**If `X-Llm-Pivot-Upstream` is present, the engine answered; if absent,
-llm-pivot answered.**
+`X-Llm-Pivot-Upstream` identifies responses returned by the engine. Responses
+produced by llm-pivot omit it.
 
 ```sh
 $ curl -sD- -o/dev/null localhost:8078/chat/completions -d '{"model":"my-model"}'
@@ -344,9 +322,8 @@ X-Llm-Pivot: 1.0.0
 X-Llm-Pivot-Upstream: strata/my-model:8024     ← the engine said no
 ```
 
-Engine error statuses are written to the monitoring pane, so the page shows
-what a client is doing wrong. Repeats of the same status/method/path are
-suppressed for 10 seconds.
+The monitor logs HTTP error statuses returned by the engine. Repeats of the
+same status/method/path are suppressed for 10 seconds.
 
 llm-pivot's own error payloads follow the OpenAI shape:
 
@@ -359,11 +336,9 @@ llm-pivot's own error payloads follow the OpenAI shape:
 | `engine_starting`     | 503 | the engine is still coming up            |
 | `engine_unavailable`  | 502 | the engine stopped answering mid-request |
 
----
-
 ## Configuration file
 
-Default location, by precedence:
+The configuration path is selected in this order:
 
 1. `-config <path>`
 2. `$LLM_PIVOT_CONFIG`
@@ -399,7 +374,7 @@ engines:
 
 ### Keys
 
-**Top level**
+#### Top level
 
 | Key                             | Default     | Meaning                                    |
 |---------------------------------|-------------|--------------------------------------------|
@@ -411,7 +386,7 @@ engines:
 | `inactive_stop_timeout_seconds` | `600`       | stop an idle engine after this; `-1` never |
 | `log_lines`                     | `4000`      | monitoring buffer size; resized live       |
 
-**Per engine**
+#### Per engine
 
 | Key                        | Default  | Meaning                                                                           |
 |----------------------------|----------|-----------------------------------------------------------------------------------|
@@ -428,44 +403,42 @@ engines:
 | `env`                      | —        | list of `KEY=VALUE`                                                               |
 | `models`                   | —        | list of models                                                                    |
 
-**Per model**
+#### Per model
 
 | Key       | Meaning                                                       |
 |-----------|---------------------------------------------------------------|
-| `name`    | unique across **all** engines; what clients send as `"model"` |
+| `name`    | unique across all engines; what clients send as `"model"` |
 | `options` | extra flags; override the engine's own flags                  |
 
 ### Placeholders
 
-Usable in `command`, `options`, `monitor_url`, `work_dir`, `env`:
-`{{port}}`, `{{engine}}`, `{{model}}`/`{{name}}`, `{{host}}`, `{{home}}`.
+Usable in `command`, `options`, `monitor_url`, `work_dir`, `env`: `{{port}}`,
+`{{engine}}`, `{{model}}`/`{{name}}`, `{{host}}`, `{{home}}`.
 
 Use `{{home}}/models/model.gguf` instead of `~/models/model.gguf`; shell
 expansion does not occur.
 
-`{{host}}` is always `127.0.0.1`.  An engine has to be reachable on
-the loopback interface to be proxied to at all, so `--host {{host}}` is the
-safe way to write that.
+`{{host}}` is always `127.0.0.1`, the address used for engine health checks
+and routed requests. Use `--host {{host}}` when the engine needs an explicit
+bind address.
 
 ### Startup validation
 
 llm-pivot refuses to start on: unparseable YAML or an unknown option, a
 duplicated or empty engine/model name, a bad or conflicting listener port, an
 empty or unparseable `command`, malformed model options, an unknown monitoring
-mode, `http` or `embed` with no `monitor_url`, a nonempty `health_path` without
-a leading `/`, or an `env` entry that is not `KEY=VALUE`. Engine ports may be
-shared across engines, since only one runs at a time. Exit status is `1` for
-validation failures. Validation does not check whether executable or model
-files exist; those problems surface when starting or using the engine.
-
----
+mode, `http` or `embed` with no `monitor_url`, a nonempty `health_path`
+without a leading `/`, or an `env` entry that is not `KEY=VALUE`. Engine ports
+may be shared across engines, since only one runs at a time. Exit status is
+`1` for validation failures. Validation does not check whether executable or
+model files exist; those problems surface when starting or using the engine.
 
 ## How engine and model options are merged
 
 The engine's `command` carries the defaults; a model's `options` layer on top:
 
-- a flag in **both** keeps the engine's **position** but takes the **model's
-  value**; repeats of it in the engine command are dropped;
+- a flag present in both keeps its first position in the engine command and
+  takes the model's value; other engine occurrences of that flag are dropped;
 - a flag only the model has is appended, as are bare operands;
 - `--flag=value` and `--flag value` are the same flag;
 - `-1` after a flag is a value, not a flag (`--seed -1` survives);
@@ -479,11 +452,9 @@ executed       : /bin/llama-server --ctx-size 8192 --device Vulkan1 \
                             -m /models/x.gguf --port 8080
 ```
 
-You cannot *remove* an engine flag from a model; give it the value you want
+You cannot remove an engine flag from a model; give it the value you want
 (`--flash-attn off`). The merged line is shown on each model page and written
 to the monitor as `$ …` when an engine starts.
-
----
 
 ## Command-line flags
 
@@ -497,26 +468,23 @@ to the monitor as `$ …` when an engine starts.
 -version               print the version and exit
 ```
 
-Overrides are not written back to the file. They belong to the run, not to
-the configuration: saving anything from the page writes the file's own
-`monitor_port`, `router_port` and `host` back unchanged, and a reload
-(`systemctl --user reload llm-pivot`) puts the overrides on again after
-re-reading the file, so the listeners stay where the command line asked.
+Command-line overrides apply for the current run. Saving from the page keeps
+the file's own `monitor_port`, `router_port` and `host` values unless you
+change them in Settings. A reload reapplies the overrides after reading the
+file.
 
-The page shows the value in force, which is the override. Typing a *different*
-one into the settings form does take effect and is written to the file — the
-page never silently ignores what you type — and the form says which override
-it had to drop to do so. The next start applies the flag again.
+Settings shows the effective values, including any overrides. Entering a
+different value saves it to the file and drops that override for the current
+run. The form reports which override was dropped. Starting the program again
+with the same flags reapplies them.
 
 `-check` validates the file on its own and then once more with the overrides
 applied, so a flag that collides with an engine port is reported too.
 
----
-
 ## HTTP API
 
-Everything the page does is a plain JSON call on the monitor port, so it can be
-scripted.
+The page uses these endpoints on the monitor port. Scripts can call them
+directly.
 
 | Method & path                                 | Body / result                                              |
 |-----------------------------------------------|------------------------------------------------------------|
@@ -534,47 +502,58 @@ scripted.
 
 API rejections come back as `{"error":"…"}` with a 4xx status. JSON request
 bodies are limited to 1 MiB. Engine/model saves replace their editable fields,
-so send the complete definition; `original` identifies the existing name
-when updating or renaming. Configuration edits return `notes`, `ports_moved`,
+so send the complete definition; `original` identifies the existing name when
+updating or renaming. Configuration edits return `notes`, `ports_moved`,
 `monitor_port` and `router_port`.
 
 `/api/state` also returns `log_seq` and `log_gap`. Use `log_seq` as the next
 `since` value; `log_gap` means older requested lines were cleared or dropped
 from the buffer.
 
-The page is a single page, deep-linkable: `#settings`, `#engine/<name>`,
+The monitor supports links to individual forms: `#settings`, `#engine/<name>`,
 `#model/<engine>/<model>`.
-
----
 
 ## Troubleshooting
 
-**Service will not start.** Run the binary by hand; the reason is on stderr and
-in `journalctl --user -u llm-pivot`.
+### Service will not start
 
-**Engine will not start.** Its output is in the monitor pane, under the `$ …`
-line. Usual causes: wrong path, unknown option, missing model file.
+Run the binary by hand; the reason is on stderr and in `journalctl --user -u
+llm-pivot`.
 
-**"did not answer on port N".** The engine started but never served
-`health_path`. It may need more time, listen on a different port, or bind an
-address other than loopback.
+### Engine will not start
 
-**"exited during startup".** The process died; exit status and last output are
-in the pane above the message.
+Its output is in the monitor pane, under the `$ …` line. Usual causes: wrong
+path, unknown option, missing model file.
 
-**"port N is already in use".** Something else listens there — usually an engine
-you started earlier. llm-pivot refuses to start on top of it on purpose. Find it
-with `ss -ltnp 'sport = :N'`.
+### "did not answer on port N"
 
-**A browser window opens on start.** That is the engine, not llm-pivot. Drop the
-flag that opens the page (strata's `--open`, for instance), or point
-`monitor: embed` at it.
+The engine started but never served `health_path`. It may need more time,
+listen on a different port, or bind an address other than loopback.
 
-**Monitor shows raw HTML.** You are in `http` mode. Switch the engine to
-`embed`.
+### "exited during startup"
 
-**Big models: know which wait you are looking at.** Only the first is governed
-by the startup timeout:
+The process died; exit status and last output are in the pane above the
+message.
+
+### "port N is already in use"
+
+Another process is listening on the engine port. Find it with `ss -ltnp 'sport
+= :N'`.
+
+### A browser window opens on start
+
+Check the engine command for a flag that opens a browser, such as strata's
+`--open`, and remove it. To view the engine page inside llm-pivot, use
+`monitor: embed`.
+
+### Monitor shows raw HTML
+
+You are in `http` mode. Switch the engine to `embed`.
+
+### Slow model startup
+
+The startup timeout covers readiness checks. Loading triggered by the first
+generation request has no router deadline:
 
 | Wait                                       | Covered by                | Typical        |
 |--------------------------------------------|---------------------------|----------------|
@@ -582,27 +561,34 @@ by the startup timeout:
 | first request → first token (weights load) | nothing                   | can be minutes |
 
 Many engines open the port immediately and load lazily on the first request.
-llm-pivot sets no deadline on the second wait. **Your client's timeout is the
-one that matters**, and a client that gives up mid-load cancels the request.
-Raise the client timeout, or send a warm-up request through the router.
-Starting a model from the monitor page only waits for the configured readiness
-probe; it does not send a generation request.
+llm-pivot sets no deadline on the second wait. A client timeout cancels the
+request, including during model loading. Raise the client timeout, or send a
+warm-up request through the router. Starting a model from the monitor page
+only waits for the configured readiness probe; it does not send a generation
+request.
 
-**The port will not change.** If the new port is taken, the rebind fails and the
-old port keeps working. The new setting is still saved, so correct it in the
-configuration before restarting the service.
+### The port will not change
 
-**Model names and the router.** The router dispatches purely on the configured
-model *name*, which is why names must be unique across engines. The name need
-not match the model filename, but the engine must accept it in forwarded
-requests (configure an engine-side alias if needed).
+If the new port is taken, the rebind fails and the old port keeps working. The
+new setting is still saved, so correct it in the configuration before
+restarting the service.
 
-**Nothing proxied / 503.** Either no engine is running and no model was named,
-or the engine is still loading. `GET /router/status` says which.
+### Model names and the router
 
-**404 from a client, but the engine runs.** Check `X-Llm-Pivot-Upstream`. If it
-is present, the engine rejected the *path*, not the model — usually a client
-base URL missing `/v1`:
+The router dispatches purely on the configured model name, which must be
+unique across engines. The name need not match the model filename, but the
+engine must accept it in forwarded requests (configure an engine-side alias if
+needed).
+
+### Nothing proxied / 503
+
+Either no engine is running and no model was named, or the engine is still
+loading. `GET /router/status` says which.
+
+### 404 from a client, but the engine runs
+
+Check `X-Llm-Pivot-Upstream`. If it is present, the engine returned the 404.
+Check whether the client base URL is missing `/v1`:
 
 ```
 http://127.0.0.1:8078/v1   ✅
