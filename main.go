@@ -1,5 +1,5 @@
 // Command llm-pivot starts, stops and monitors local LLM engines
-// (llama.cpp, strata, ninfer, ...) and forwards OpenAI-compatible traffic to
+// (llama.cpp, strata, ninfer, ...) and routes OpenAI or Anthropic requests to
 // whichever engine currently serves the requested model.
 package main
 
@@ -112,7 +112,7 @@ func main() {
 	}
 
 	mgr.Log().System(fmt.Sprintf("llm-pivot %s started; configuration %s", Version, cfg.Path()))
-	mgr.Log().System(fmt.Sprintf("monitor page on port %d, OpenAI router on port %d",
+	mgr.Log().System(fmt.Sprintf("monitor page on port %d, API router on port %d",
 		cfg.MonitorPort, cfg.RouterPort))
 	// The page would otherwise show a value that is nowhere in the file.
 	if over := cfg.overridden(); len(over) > 0 {
@@ -200,8 +200,8 @@ Usage:
   llm-pivot [flags]
 
 The monitor page (default port 8061) manages engines and models. The router
-port (default 8078) accepts OpenAI-compatible requests and forwards them to
-the engine serving the requested model, starting it if necessary.
+port (default 8078) detects OpenAI and Anthropic requests automatically and
+forwards them to the engine serving the requested model, starting it if necessary.
 
 Flags:
 `, Version)

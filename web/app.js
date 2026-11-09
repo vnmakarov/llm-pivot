@@ -293,10 +293,11 @@ function renderSettings() {
         <input type="number" id="f-monitor-port" min="1" max="65535" value="${esc(c.monitor_port)}">
       </div>
       <div class="field">
-        <label>Router port <span class="hint">— OpenAI requests</span></label>
+        <label>Router port <span class="hint">— API requests</span></label>
         <input type="number" id="f-router-port" min="1" max="65535" value="${esc(c.router_port)}">
       </div>
     </div>
+    <p class="card-sub">The router detects OpenAI and Anthropic requests automatically.</p>
     <div class="grid3">
       <div class="field">
         <label>Bind address</label>

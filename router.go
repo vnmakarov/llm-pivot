@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -50,8 +51,8 @@ func (t routeTarget) String() string {
 	return fmt.Sprintf("%s/%s:%d", t.engine, t.model, t.port)
 }
 
-// Router serves the OpenAI-compatible port. Every request is forwarded to the
-// engine that is currently running; a request naming a different model first
+// Router detects OpenAI and Anthropic requests by path. A request naming
+// a different model first
 // stops that engine and starts the right one.
 type Router struct {
 	mgr      *Manager
@@ -183,16 +184,59 @@ func (rt *Router) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	switch {
 	case r.URL.Path == "/v1/models" && r.Method == http.MethodGet:
-		rt.listModels(w)
+		rt.listModels(w, r)
 		return
 	case r.URL.Path == "/router/status":
 		writeJSON(w, http.StatusOK, rt.mgr.Status())
 		return
 	}
 
-	wanted, err := requestedModel(r, maxInspectBody)
+	anthropic := r.URL.Path == "/v1/messages" || strings.HasPrefix(r.URL.Path, "/v1/messages/")
+	countTokens := r.URL.Path == "/v1/messages/count_tokens"
+	writeError := writeOpenAIError
+	var anthropicIn anthropicRequest
+	if anthropic {
+		writeError = func(w http.ResponseWriter, status int, msg, kind string) {
+			switch status {
+			case 404:
+				kind = "not_found_error"
+			case 503:
+				kind = "overloaded_error"
+			case 502:
+				kind = "api_error"
+			}
+			writeAnthropicError(w, status, msg, kind)
+		}
+		known := r.URL.Path == "/v1/messages" || countTokens
+		if !known || r.Method != http.MethodPost {
+			status := http.StatusNotFound
+			if known {
+				status = http.StatusMethodNotAllowed
+				w.Header().Set("Allow", "POST")
+			}
+			writeError(w, status,
+				"supported Anthropic endpoints: POST /v1/messages and POST /v1/messages/count_tokens",
+				"invalid_request_error")
+			return
+		}
+		var err error
+		anthropicIn, err = prepareAnthropic(r)
+		// max_tokens belongs to Messages alone; count_tokens never carries one.
+		if err == nil && !countTokens && anthropicIn.MaxTokens <= 0 {
+			err = errors.New("max_tokens must be a positive integer")
+		}
+		if err != nil {
+			writeError(w, 400, err.Error(), "invalid_request_error")
+			return
+		}
+	}
+	wanted := anthropicIn.Model
+	var err error
+	if !anthropic {
+		wanted, err = requestedModel(r, maxInspectBody)
+	}
 	if err != nil {
-		writeOpenAIError(w, http.StatusBadRequest, err.Error(), "invalid_request_error")
+		writeError(w, http.StatusBadRequest, err.Error(), "invalid_request_error")
 		return
 	}
 
@@ -200,7 +244,7 @@ func (rt *Router) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if wanted != "" {
 		cfg := rt.mgr.Config()
 		if eng, _ := cfg.FindModel(wanted); eng == nil {
-			writeOpenAIError(w, http.StatusNotFound,
+			writeError(w, http.StatusNotFound,
 				"model "+strconv.Quote(wanted)+" is not configured in llm-pivot; "+
 					"add it on the monitor page or GET /v1/models for the list",
 				"model_not_found")
@@ -212,7 +256,7 @@ func (rt *Router) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// another model can already have changed the answer.
 		engine, port, err := rt.mgr.EnsureModel(wanted)
 		if err != nil {
-			writeOpenAIError(w, http.StatusServiceUnavailable,
+			writeError(w, http.StatusServiceUnavailable,
 				"could not start model "+strconv.Quote(wanted)+": "+err.Error(),
 				"engine_start_failed")
 			return
@@ -222,26 +266,34 @@ func (rt *Router) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		var ready bool
 		target.engine, target.model, target.port, ready = rt.mgr.RunningTarget()
 		if target.model == "" {
-			writeOpenAIError(w, http.StatusServiceUnavailable,
+			writeError(w, http.StatusServiceUnavailable,
 				"no engine is running and the request does not name a model; "+
 					"start one on the monitor page or send a \"model\" field",
 				"no_engine_running")
 			return
 		}
 		if !ready {
-			writeOpenAIError(w, http.StatusServiceUnavailable,
+			writeError(w, http.StatusServiceUnavailable,
 				"engine for model "+strconv.Quote(target.model)+" is still starting",
 				"engine_starting")
 			return
 		}
 	}
 	if target.port == 0 {
-		writeOpenAIError(w, http.StatusServiceUnavailable,
+		writeError(w, http.StatusServiceUnavailable,
 			"the engine stopped before the request could be forwarded", "no_engine_running")
 		return
 	}
 
 	defer rt.mgr.MarkUsed()()
+	if countTokens {
+		rt.anthropicCountTokens(w, r, target)
+		return
+	}
+	if anthropic {
+		rt.anthropicMessages(w, r, target, anthropicIn)
+		return
+	}
 	rt.proxy.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), targetCtxKey{}, target)))
 }
 
@@ -311,9 +363,26 @@ func requestedModel(r *http.Request, maxBody int64) (string, error) {
 
 // listModels answers /v1/models from the configuration, so clients can see
 // every model the router can route to, not just the running one.
-func (rt *Router) listModels(w http.ResponseWriter) {
+func (rt *Router) listModels(w http.ResponseWriter, r *http.Request) {
 	cfg := rt.mgr.Config()
 	_, running, _, _ := rt.mgr.RunningTarget()
+	// Both APIs use /v1/models. Anthropic clients identify themselves by
+	// their version header; requests without it retain the OpenAI format.
+	if r.Header.Get("anthropic-version") != "" {
+		data := []any{}
+		first, last := "", ""
+		for _, e := range cfg.Engines {
+			for _, m := range e.Models {
+				if first == "" {
+					first = m.Name
+				}
+				last = m.Name
+				data = append(data, map[string]any{"id": m.Name, "type": "model", "display_name": m.Name, "created_at": time.Now().UTC().Format(time.RFC3339)})
+			}
+		}
+		writeJSON(w, 200, map[string]any{"data": data, "has_more": false, "first_id": first, "last_id": last})
+		return
+	}
 
 	type modelObj struct {
 		ID      string `json:"id"`

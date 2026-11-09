@@ -115,6 +115,12 @@ log.scrollTop = 100; follow.checked = true;
 run('$("follow").onchange()');
 check('ticking Follow returns to the end', log.scrollTop, bottom());
 
+// Settings explains automatic API selection without asking for a mode.
+byId.detail = stub();
+run(`S.cfg = { monitor_port: 8061, router_port: 8078, host: '127.0.0.1' }; renderSettings()`);
+check('Settings explains automatic API selection', byId.detail.innerHTML.includes('detects OpenAI and Anthropic requests automatically'), true);
+check('Settings has no manual API selector', byId.detail.innerHTML.includes('id="f-interface"'), false);
+
 if (fails) {
   console.error(`${fails} check(s) failed`);
   process.exit(1);

@@ -7,6 +7,10 @@
 *.out
 coverage.*
 
+# Local GOPATH and build cache, when they are kept inside the repository
+/.gopath/
+/.gocache/
+
 # Local configuration written by the monitor page, if kept beside the source
 /config.yaml
 /config.yaml.bak*

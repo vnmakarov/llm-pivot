@@ -73,6 +73,8 @@ type Engine struct {
 
 // Config is the whole persisted state of llm-pivot.
 type Config struct {
+	// RouterInterface accepts the obsolete setting when loading older files.
+	RouterInterface     string    `yaml:"router_interface,omitempty" json:"-"`
 	MonitorPort         int       `yaml:"monitor_port" json:"monitor_port"`
 	RouterPort          int       `yaml:"router_port" json:"router_port"`
 	Host                string    `yaml:"host,omitempty" json:"host"`
@@ -106,6 +108,7 @@ type listeners struct {
 // configuration without racing the running router.
 func (c *Config) Clone() *Config {
 	out := &Config{
+		RouterInterface:     c.RouterInterface,
 		MonitorPort:         c.MonitorPort,
 		RouterPort:          c.RouterPort,
 		Host:                c.Host,
@@ -260,6 +263,8 @@ func flagged(port int) string {
 // normalize fills in defaults and canonicalises user-written values.
 // It is called both after loading and before saving.
 func (c *Config) normalize() {
+	// API selection is now automatic. Drop the obsolete key on the next save.
+	c.RouterInterface = ""
 	// Defaults belong to the file's own layer, so that a flag is never the
 	// thing that gets defaulted and never the thing that gets written back.
 	// An empty layer adopts the exported fields first: that is how a freshly
@@ -498,7 +503,7 @@ func (c *Config) Path() string { return c.path }
 const defaultConfigYAML = `# llm-pivot configuration.
 #
 # monitor_port  port of the monitoring / settings web page
-# router_port   OpenAI-compatible port forwarded to the running engine
+# router_port   API port forwarded to the running engine
 monitor_port: 8061
 router_port: 8078
 host: 127.0.0.1

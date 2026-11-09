@@ -88,9 +88,45 @@ func TestHelperEngine(t *testing.T) {
 		io.WriteString(w, `{"slow":true}`)
 	})
 	mux.HandleFunc("/v1/chat/completions", func(w http.ResponseWriter, r *http.Request) {
+		if os.Getenv("ER_FAKE_ANTHROPIC_BACKEND") == "1" {
+			anthropicTestBackend(w, r)
+			return
+		}
 		body, _ := io.ReadAll(r.Body)
 		w.Header().Set("Content-Type", "application/json")
 		fmt.Fprintf(w, `{"served_by":%q,"echo":%s}`, tag, string(body))
+	})
+	// llama.cpp's native prompt renderer and tokenizer, which count_tokens
+	// prefers. Without them an engine must still answer, by estimate.
+	mux.HandleFunc("/apply-template", func(w http.ResponseWriter, r *http.Request) {
+		var in struct {
+			Messages []struct {
+				Content any `json:"content"`
+			} `json:"messages"`
+		}
+		if os.Getenv("ER_FAKE_TOKENIZER") != "1" || json.NewDecoder(r.Body).Decode(&in) != nil {
+			http.NotFound(w, r)
+			return
+		}
+		prompt := ""
+		for _, m := range in.Messages {
+			prompt += fmt.Sprint(m.Content) + "\n"
+		}
+		writeJSON(w, 200, map[string]string{"prompt": prompt})
+	})
+	mux.HandleFunc("/tokenize", func(w http.ResponseWriter, r *http.Request) {
+		var in struct {
+			Content string `json:"content"`
+		}
+		if os.Getenv("ER_FAKE_TOKENIZER") != "1" || json.NewDecoder(r.Body).Decode(&in) != nil {
+			http.NotFound(w, r)
+			return
+		}
+		tokens := []int{}
+		for i := range strings.Fields(in.Content) {
+			tokens = append(tokens, i+1)
+		}
+		writeJSON(w, 200, map[string][]int{"tokens": tokens})
 	})
 	// Counts the body instead of echoing it, so a request far too big to
 	// hold twice can still be checked for having arrived whole.

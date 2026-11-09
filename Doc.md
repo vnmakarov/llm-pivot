@@ -11,6 +11,7 @@ See [README.md](README.md) for an overview and screenshot.
 - [Development](#development)
 - [The monitor page](#the-monitor-page)
 - [Routing OpenAI requests](#routing-openai-requests)
+- [Anthropic interface and Claude CLI](#anthropic-interface)
 - [Configuration file](#configuration-file)
 - [How engine and model options are merged](#how-engine-and-model-options-are-merged)
 - [Command-line flags](#command-line-flags)
@@ -23,9 +24,9 @@ Different models may need different engines, such as llama.cpp, strata or
 ninfer. When GPU memory only fits one model, switching requires stopping one
 engine and starting another with its model-specific options.
 
-llm-pivot handles that switch when a request names a model. Clients use one
-OpenAI-compatible endpoint, and the monitor page shows the active engine's
-status and output.
+llm-pivot handles that switch when a request names a model. OpenAI and
+Anthropic clients share one router port, and the monitor page shows the
+active engine's status and output.
 
 ## Design notes
 
@@ -96,6 +97,17 @@ at `~/.config/llm-pivot/config.yaml`; edit `ExecStart` if yours differ.
 On stop, llm-pivot sends `SIGTERM` to the engine's process group. If it does
 not exit within the graceful stop timeout, llm-pivot sends `SIGKILL`.
 
+After updating the source, rebuild the binary and restart the service:
+
+```sh
+go build -o llm-pivot .
+systemctl --user restart llm-pivot
+```
+
+Reloading with `systemctl --user reload llm-pivot` only rereads the
+configuration; it does not load a rebuilt binary. Restarting also stops the
+active engine, which starts again on the next model request.
+
 ## Development
 
 ```sh
@@ -110,7 +122,9 @@ With Node.js installed, `go test` also runs the monitor scrolling tests in
 
 The end-to-end tests re-execute the test binary as a stand-in LLM engine,
 exercising real spawning, health waiting, killing, model switching, and the
-config editing API.
+config editing API. Anthropic regression tests cover CLI-style conversations,
+streamed tool arguments, system-message placement, thinking controls, token
+counting and effort compatibility. These tests use simulated engines.
 
 ## The monitor page
 
@@ -184,7 +198,7 @@ Click **Add model** under an engine:
 
 | Field                         | Meaning                                                                             |
 |-------------------------------|-------------------------------------------------------------------------------------|
-| **Model name**                | What OpenAI clients put in `"model"`. Must be unique across all engines.       |
+| **Model name**                | What clients put in `"model"`. Must be unique across all engines.       |
 | **Additional engine options** | Extra flags for this model. A repeated flag replaces the engine's value for it. |
 
 The **Effective command line** box shows the command after merging the saved
@@ -312,8 +326,10 @@ Router replies include these headers:
 | `X-Llm-Pivot`          | every reply               | the version                                     |
 | `X-Llm-Pivot-Upstream` | proxied replies only  | `<engine>/<model>:<port>` identifying the engine |
 
-`X-Llm-Pivot-Upstream` identifies responses returned by the engine. Responses
-produced by llm-pivot omit it.
+`X-Llm-Pivot-Upstream` identifies the engine that answered. In the Anthropic
+interface, llm-pivot translates that response, and errors found while
+translating it also carry the header. Errors before an engine response,
+such as an unknown model or a connection failure, omit it.
 
 ```sh
 $ curl -sD- -o/dev/null localhost:8078/chat/completions -d '{"model":"my-model"}'
@@ -335,6 +351,160 @@ llm-pivot's own error payloads follow the OpenAI shape:
 | `no_engine_running`   | 503 | nothing runs and no model named          |
 | `engine_starting`     | 503 | the engine is still coming up            |
 | `engine_unavailable`  | 502 | the engine stopped answering mid-request |
+
+## Anthropic interface
+
+The router recognizes each API by its endpoint. OpenAI requests such as
+`POST /v1/chat/completions` are proxied to the engine; `POST /v1/messages`
+is translated to OpenAI Chat Completions. Both clients can use the same port
+at the same time. No interface switch is needed. The old `router_interface`
+setting is ignored and removed on the next configuration save.
+
+### Client setup
+
+| Client | Base URL | Model |
+|--------|----------|-------|
+| OpenAI-compatible | `http://127.0.0.1:8078/v1` | configured model name |
+| Anthropic-compatible | `http://127.0.0.1:8078` | configured model name |
+
+Anthropic clients append `/v1/messages` themselves. Use a dummy API key if
+required by the client; llm-pivot does not authenticate requests. Engine
+commands and model names stay the same.
+
+```sh
+curl http://127.0.0.1:8078/v1/messages \
+  -H 'Content-Type: application/json' \
+  -H 'anthropic-version: 2023-06-01' \
+  -d '{"model":"qwen3-30b","max_tokens":128,"messages":[{"role":"user","content":"hello"}]}'
+```
+
+`model`, a positive `max_tokens`, and a nonempty `messages` array are
+required. `?model=<name>` overrides the model in a valid request body.
+
+`POST /v1/messages/count_tokens` takes the same body without `max_tokens`
+and answers `{"input_tokens": N}`. See
+[Token counting](#token-counting) for how the count is produced.
+
+### Claude CLI
+
+With Claude Code installed, point the CLI at the router and select a model
+configured in llm-pivot:
+
+```sh
+ANTHROPIC_BASE_URL=http://127.0.0.1:8078 \
+ANTHROPIC_AUTH_TOKEN=unused \
+claude --model qwen3-30b
+```
+
+Replace `qwen3-30b` with your configured model name. Requests naming an
+unconfigured model return `404`, so any other models the client requests
+must also be configured. See Claude Code's [gateway setup](https://code.claude.com/docs/en/llm-gateway-connect)
+and [model configuration](https://code.claude.com/docs/en/model-config).
+
+### Request translation
+
+The adapter supports text, images (URL or base64), custom tools, text tool
+results, tool choice and sampling controls. It returns Anthropic message
+objects or SSE events, including incremental tool arguments. The engine
+must support the corresponding OpenAI features.
+
+| Anthropic option | Engine request |
+|------------------|----------------|
+| `system` | text in the initial system message |
+| `max_tokens` | `max_tokens` |
+| `temperature`, `top_p`, `top_k` | same keys |
+| `stop_sequences` | `stop` |
+| custom `tools` | function tools with the supplied input schemas |
+| `tool_use` / `tool_result` blocks | assistant tool calls / tool messages |
+| `tool_result` with `is_error` | tool message text prefixed with `Error:` |
+| `output_config.format` (`json_schema`) | `response_format` with the supplied schema |
+| `output_config.effort` | `reasoning_effort`; `max` becomes `xhigh` |
+
+Unknown top-level options and unsupported content blocks return `400` with
+an explanation. `metadata` is accepted without being sent to the engine.
+Prompt-cache annotations on content blocks have no effect.
+
+### System messages and effort changes
+
+Claude CLI can add `system` messages inside the conversation. The adapter
+collects their active text, in order, after the top-level system text and
+sends one system message at the beginning. This supports templates that
+raise `System message must be at the beginning`. Later instructions move
+ahead of the history, so their original timing is not preserved. User and
+assistant turns and tool calls/results keep their order.
+
+A system reminder with `clear_at: next_user_message` is omitted once a later
+user message exists. Reminders without `clear_at`, or with `clear_at: never`,
+remain active. Empty messages that only change effort add no prompt text.
+
+Per-message `output_config.effort` overrides the top-level effort for the
+current generation; the last change wins. Per-message output configuration
+supports effort only. Disabled thinking overrides all effort settings.
+
+### Thinking and engine effort levels
+
+| `thinking.type` | Engine controls |
+|-----------------|-----------------|
+| `enabled` | `chat_template_kwargs.enable_thinking: true` and `reasoning_budget_tokens` from `budget_tokens` |
+| `adaptive` | `chat_template_kwargs.enable_thinking: true`; uses the engine's configured budget and requested effort |
+| `disabled` | `chat_template_kwargs.enable_thinking: false` and `reasoning_effort: none` |
+
+For enabled thinking, `budget_tokens` must be at least 1024 and less than
+`max_tokens`. Thinking controls are llama.cpp extensions; other engines may
+ignore them.
+
+Reasoning an engine reports as `reasoning_content` is returned as a
+`thinking` block ahead of the answer, streamed as `thinking_delta`. A local
+engine cannot produce a Claude signature, so the block carries an empty one
+and clients that replay it get their reasoning back as `reasoning_content`.
+Redacted thinking in history is dropped, since nothing local can read it.
+`thinking.display` is validated but does not hide the block: engine
+reasoning is plain text that the engine already exposes in full.
+
+Effort values `low`, `medium`, `high` and `xhigh` are forwarded unchanged;
+`max` maps to `xhigh`. Templates differ in the values they accept. If an
+engine returns `400` or `500` with `Unexpected reasoning effort ...` and
+`Supported types are ...`, the adapter retries once with the nearest listed
+level, preferring the higher level on a tie. For example, a template accepting
+`xhigh`, `medium` and `low` gets `xhigh` when it rejects `high`.
+
+The monitor logs the replacement. Other errors and responses that have
+started streaming are not retried. Disabled thinking is never changed to an
+enabled effort level.
+
+### Response details
+
+`GET /v1/models` returns Anthropic format when the request includes an
+`anthropic-version` header; otherwise it returns OpenAI format. It lists all
+configured models without pagination. `/router/status` and the monitor API
+remain available. Errors on `/v1/messages` and its subpaths use Anthropic
+error objects; errors on OpenAI endpoints use OpenAI error objects.
+
+Token counts come from the engine; unavailable counts are zero. Stop reasons
+are mapped to `end_turn`, `max_tokens` or `tool_use`. The adapter cannot recover
+which stop sequence matched from an OpenAI response, so `stop_sequence` is null.
+
+### Token counting
+
+`POST /v1/messages/count_tokens` validates and translates the request the
+same way `/v1/messages` does, then counts the prompt the engine would
+actually receive. Engines expose no common token counter, so the adapter
+tries llama.cpp's native endpoints first: `/apply-template` renders the
+prompt and `/tokenize` counts it, neither of which generates anything. An
+engine missing either endpoint gets an estimate of four characters per
+token, and the monitor logs that counts for the model are estimated.
+`X-Llm-Pivot-Upstream` is present only on exact counts.
+
+Counting starts the engine for the named model, as any other request does.
+
+### Limits
+
+Requests are limited to 64 MiB. Document blocks, server tools and non-text
+tool results are rejected. Batches and the remaining Anthropic
+endpoints are not implemented. Compatibility depends on the engine and
+client features in use; this adapter does not connect to Anthropic's hosted
+models. See the [Messages reference](https://platform.claude.com/docs/en/api/http/messages)
+and [streaming protocol](https://platform.claude.com/docs/en/build-with-claude/streaming).
 
 ## Configuration file
 
@@ -379,7 +549,7 @@ engines:
 | Key                             | Default     | Meaning                                    |
 |---------------------------------|-------------|--------------------------------------------|
 | `monitor_port`                  | `8061`      | web page port                              |
-| `router_port`                   | `8078`      | OpenAI port                                |
+| `router_port`                   | `8078`      | OpenAI and Anthropic API port                                |
 | `host`                          | `127.0.0.1` | bind address for both ports                |
 | `startup_timeout_seconds`       | `180`       | wait for TCP and optional health probe                      |
 | `graceful_stop_timeout_seconds` | `20`        | `SIGTERM` grace before `SIGKILL`           |
@@ -517,8 +687,8 @@ The monitor supports links to individual forms: `#settings`, `#engine/<name>`,
 
 ### Service will not start
 
-Run the binary by hand; the reason is on stderr and in `journalctl --user -u
-llm-pivot`.
+Run the binary by hand; the reason is on stderr and in
+`journalctl --user -u llm-pivot`.
 
 ### Engine will not start
 
@@ -537,8 +707,8 @@ message.
 
 ### "port N is already in use"
 
-Another process is listening on the engine port. Find it with `ss -ltnp 'sport
-= :N'`.
+Another process is listening on the engine port. Find it with
+`ss -ltnp 'sport = :N'`.
 
 ### A browser window opens on start
 
@@ -600,3 +770,22 @@ Ask the engine directly to see what it serves:
 ```sh
 curl -s localhost:<engine port>/v1/models
 ```
+
+### Claude CLI compatibility errors
+
+`unsupported Anthropic option "output_config"`, `extended thinking is not
+supported by this adapter`, and `message role must be user or assistant`
+were errors from older adapter versions. Current code supports output
+configuration, enabled/adaptive/disabled thinking, and system messages.
+If those exact errors persist after updating, rebuild and restart llm-pivot;
+a configuration reload does not replace the running binary.
+
+For `Unexpected reasoning effort high`, current code retries once using the
+engine's reported supported values. Check the monitor for the replacement.
+`System message must be at the beginning` is handled by combining active
+system instructions into the initial message. These translations apply to
+Anthropic `/v1/messages` requests; OpenAI request bodies are passed through.
+
+For a different `400`, read the option or block named in the error. For a
+remaining engine `500`, inspect its process output for the underlying error,
+such as memory exhaustion or an inference failure.
