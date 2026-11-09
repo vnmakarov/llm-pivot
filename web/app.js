@@ -132,6 +132,30 @@ function modelLight(name) {
   return stateSubject(st).model === name ? lightClass(st.state) : 'light';
 }
 
+/* Arrows for one row. An empty model name moves the engine itself. The ends
+   of a list are disabled rather than hidden, so rows stay the same width. */
+function moveButtons(engine, model, i, n) {
+  const data = `data-engine="${esc(engine)}"${model ? ` data-model="${esc(model)}"` : ''}`;
+  const one = (dir, glyph, off) =>
+    `<button class="move" data-move="${dir}" ${data}${off ? ' disabled' : ''}
+             title="Move ${dir}">${glyph}</button>`;
+  return `<span class="side-move">${one('up', '↑', i === 0)}${one('down', '↓', i === n - 1)}</span>`;
+}
+
+/* Reordering saves immediately; the next poll redraws the tree in the new
+   order and the selection follows, because it is tracked by name. */
+async function moveItem(d) {
+  const at = `/api/engines/${encodeURIComponent(d.engine)}`;
+  const path = d.model ? `${at}/models/${encodeURIComponent(d.model)}/move` : `${at}/move`;
+  try {
+    const res = await api('POST', path, { direction: d.move });
+    (res.notes || []).forEach((n) => toast(n));
+    await poll();
+  } catch (e) {
+    toast(e.message, 'error');
+  }
+}
+
 function renderTree() {
   const c = S.cfg;
   if (!c) return;
@@ -143,39 +167,52 @@ function renderTree() {
   const sel = S.sel;
   $('item-settings').classList.toggle('active', sel.kind === 'settings');
 
+  const engines = c.engines || [];
   let h = '';
-  for (const e of c.engines || []) {
+  engines.forEach((e, ei) => {
     const act = (sel.kind === 'engine' && sel.engine === e.name) ? ' active' : '';
-    h += `<button class="side-item engine-row${act}" data-kind="engine" data-engine="${esc(e.name)}">
-            <span class="side-icon">▸</span>
-            <span class="side-label">${esc(e.name)}</span>
-            <span class="side-sub">:${esc(e.port)}</span>
-          </button>`;
-    if (!e.models || !e.models.length) {
+    h += `<div class="side-item engine-row${act}">
+            <button class="side-main" data-kind="engine" data-engine="${esc(e.name)}">
+              <span class="side-icon">▸</span>
+              <span class="side-label">${esc(e.name)}</span>
+              <span class="side-sub">:${esc(e.port)}</span>
+            </button>
+            ${moveButtons(e.name, '', ei, engines.length)}
+          </div>`;
+    const models = e.models || [];
+    if (!models.length) {
       h += `<div class="engine-empty">no models yet</div>`;
     }
-    for (const m of e.models || []) {
+    models.forEach((m, mi) => {
       const ma = (sel.kind === 'model' && sel.model === m.name) ? ' active' : '';
-      h += `<button class="side-item model-row${ma}" data-kind="model"
-                    data-engine="${esc(e.name)}" data-model="${esc(m.name)}">
-              <span class="${modelLight(m.name)}"></span>
-              <span class="side-label">${esc(m.name)}</span>
-            </button>`;
-    }
+      h += `<div class="side-item model-row${ma}">
+              <button class="side-main" data-kind="model"
+                      data-engine="${esc(e.name)}" data-model="${esc(m.name)}">
+                <span class="${modelLight(m.name)}"></span>
+                <span class="side-label">${esc(m.name)}</span>
+              </button>
+              ${moveButtons(e.name, m.name, mi, models.length)}
+            </div>`;
+    });
     const na = (sel.kind === 'new-model' && sel.engine === e.name) ? ' active' : '';
-    h += `<button class="side-item add-model-row${na}" data-kind="new-model" data-engine="${esc(e.name)}">
-            <span class="side-icon">+</span><span class="side-label">Add model</span>
-          </button>`;
-  }
-  if (!(c.engines || []).length) {
+    h += `<div class="side-item add-model-row${na}">
+            <button class="side-main" data-kind="new-model" data-engine="${esc(e.name)}">
+              <span class="side-icon">+</span><span class="side-label">Add model</span>
+            </button>
+          </div>`;
+  });
+  if (!engines.length) {
     h = `<div class="engine-empty">no engines configured</div>`;
   }
   const tree = $('tree');
   tree.innerHTML = h;
-  for (const b of tree.querySelectorAll('.side-item')) {
+  for (const b of tree.querySelectorAll('.side-main')) {
     b.addEventListener('click', () => {
       select({ kind: b.dataset.kind, engine: b.dataset.engine, model: b.dataset.model });
     });
+  }
+  for (const b of tree.querySelectorAll('.move')) {
+    b.addEventListener('click', () => moveItem(b.dataset));
   }
 }
 

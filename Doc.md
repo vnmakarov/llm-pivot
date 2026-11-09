@@ -129,21 +129,21 @@ counting and effort compatibility. These tests use simulated engines.
 ## The monitor page
 
 ```
-┌──────────────────────────────────────────────────────────────────────────┐
-│ ⚙ llm-pivot   ● llama.cpp · qwen3-30b — running 4m    router :8078       │
-├────────────────────┬─────────────────────────────────────────────────────┤
-│ ⚙ Settings         │  Model · qwen3-30b                                  │
-│                    │  ┌───────────────────────────────────────────────┐  │
-│ ENGINES        +   │  │ STATE ● running  PID 4211  PORT 8080  UP 4m   │  │
-│ ▸ llama.cpp :8080  │  └───────────────────────────────────────────────┘  │
-│     ● qwen3-30b    │  Model name       [ qwen3-30b                    ]  │
-│     ○ gemma3-27b   │  Options          [ -m /models/qwen3-30b.gguf    ]  │
-│     + Add model    │  [Save model] [Restart] [Stop] [Copy model] [Delete]│
-│ ▸ strata    :8090  │  Engine monitor · llama.cpp · qwen3-30b             │
-│     ○ phi4-mini    │  ┌───────────────────────────────────────────────┐  │
-│     + Add model    │  │ 12:05:51 ✓ engine "llama.cpp" is serving ...  │  │
-│ ~/.config/…yaml    │  └───────────────────────────────────────────────┘  │
-└────────────────────┴─────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ ⚙ llm-pivot   ● llama.cpp · qwen3-30b — running 4m    router :8078           │
+├────────────────────────┬─────────────────────────────────────────────────────┤
+│ ⚙ Settings             │  Model · qwen3-30b                                  │
+│                        │  ┌───────────────────────────────────────────────┐  │
+│ ENGINES              + │  │ STATE ● running  PID 4211  PORT 8080  UP 4m   │  │
+│ ▸ llama.cpp :8080  ↑ ↓ │  └───────────────────────────────────────────────┘  │
+│   ● qwen3-30b      ↑ ↓ │  Model name       [ qwen3-30b                    ]  │
+│   ○ gemma3-27b     ↑ ↓ │  Options          [ -m /models/qwen3-30b.gguf    ]  │
+│   + Add model          │  [Save model] [Restart] [Stop] [Copy model] [Delete]│
+│ ▸ strata    :8090  ↑ ↓ │  Engine monitor · llama.cpp · qwen3-30b             │
+│   ○ phi4-mini      ↑ ↓ │  ┌───────────────────────────────────────────────┐  │
+│   + Add model          │  │ 12:05:51 ✓ engine "llama.cpp" is serving ...  │  │
+│ ~/.config/…yaml        │  └───────────────────────────────────────────────┘  │
+└────────────────────────┴─────────────────────────────────────────────────────┘
 ```
 
 ### Left pane
@@ -161,6 +161,19 @@ light shows a model's run state:
 
 Select **Settings**, an engine or a model to open its form on the right. Use
 **+** to add an engine, or **Add model** under an engine to add a model.
+
+### Reordering engines and models
+
+Every engine and model row carries **↑** and **↓**. A click moves that entry
+one place among its siblings and writes the new order to the configuration
+file immediately; there is no separate save step. The arrows are greyed out
+at the first and last position, and a model only moves within its own engine
+— to put a model under a different engine, delete it and add it there.
+
+Order is presentational. It sets the order of this pane, of the entries in
+the configuration file, and of `GET /v1/models`. Nothing starts, stops or
+becomes a default because of its position, and moving an entry never
+interrupts a running engine.
 
 ### Right pane
 
@@ -518,6 +531,10 @@ The configuration path is selected in this order:
 The page writes this file on every change. Hand-written comments are not
 preserved once you save from the page.
 
+The order of `engines:` and of each `models:` list is the order the left pane
+shows, and a rewrite keeps it. Reorder from the page rather than by hand: the
+next save from the page would overwrite an edit made while it was open.
+
 ```yaml
 monitor_port: 8061
 router_port: 8078
@@ -664,8 +681,10 @@ directly.
 | `PUT /api/settings`                           | `{monitor_port, router_port, host, …timeouts…, log_lines}` |
 | `POST /api/engines`                           | engine fields plus `original` (empty = create)             |
 | `DELETE /api/engines/{engine}`                | removes the engine and its models                          |
+| `POST /api/engines/{engine}/move`             | `{"direction":"up"\|"down"}`                               |
 | `POST /api/models`                            | `{engine, original, name, options}`                        |
 | `DELETE /api/engines/{engine}/models/{model}` |                                                            |
+| `POST /api/engines/{engine}/models/{model}/move` | `{"direction":"up"\|"down"}`                            |
 | `POST /api/control`                           | `{"action":"start"\|"stop"\|"restart","model":"<name>"}`   |
 | `POST /api/log/clear`                         | empties the monitoring buffer                              |
 | `GET /engine/…`                               | the running `embed` engine's own page, proxied             |

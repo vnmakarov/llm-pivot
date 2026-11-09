@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"sync"
 )
@@ -323,6 +324,85 @@ func (m *Manager) SaveModel(in ModelInput) (*EditResult, error) {
 	res := &EditResult{MonitorPort: next.MonitorPort, RouterPort: next.RouterPort}
 	res.Notes = append(res.Notes, m.stopIfStale(old, next)...)
 	return res, nil
+}
+
+// moveIndex gives the position an entry takes after a move. The page disables
+// the arrow at either end, so reaching one means the page had gone stale.
+func moveIndex(i, n int, direction string) (int, error) {
+	switch direction {
+	case "up":
+		if i == 0 {
+			return 0, errors.New("it is already first")
+		}
+		return i - 1, nil
+	case "down":
+		if i == n-1 {
+			return 0, errors.New("it is already last")
+		}
+		return i + 1, nil
+	}
+	return 0, fmt.Errorf("unknown direction %q (expected up or down)", direction)
+}
+
+// MoveInput is the body of both reordering endpoints.
+type MoveInput struct {
+	Direction string `json:"direction"`
+}
+
+// Reordering touches no name, no engine assignment and no engine field, which
+// is all stopIfStale compares, so a move never disturbs a running engine and
+// these two mutators are the only ones that do not consult it.
+
+// MoveEngine shifts an engine one place up or down the configured order.
+func (m *Manager) MoveEngine(name, direction string) (*EditResult, error) {
+	editMu.Lock()
+	defer editMu.Unlock()
+
+	_, next, err := m.mutate(func(c *Config) error {
+		for i, e := range c.Engines {
+			if e.Name == name {
+				j, err := moveIndex(i, len(c.Engines), direction)
+				if err != nil {
+					return fmt.Errorf("cannot move engine %q: %w", name, err)
+				}
+				c.Engines[i], c.Engines[j] = c.Engines[j], c.Engines[i]
+				return nil
+			}
+		}
+		return fmt.Errorf("unknown engine %q", name)
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &EditResult{MonitorPort: next.MonitorPort, RouterPort: next.RouterPort}, nil
+}
+
+// MoveModel shifts a model one place up or down within its own engine.
+func (m *Manager) MoveModel(engine, model, direction string) (*EditResult, error) {
+	editMu.Lock()
+	defer editMu.Unlock()
+
+	_, next, err := m.mutate(func(c *Config) error {
+		e := c.Engine(engine)
+		if e == nil {
+			return fmt.Errorf("unknown engine %q", engine)
+		}
+		for i, mdl := range e.Models {
+			if mdl.Name == model {
+				j, err := moveIndex(i, len(e.Models), direction)
+				if err != nil {
+					return fmt.Errorf("cannot move model %q: %w", model, err)
+				}
+				e.Models[i], e.Models[j] = e.Models[j], e.Models[i]
+				return nil
+			}
+		}
+		return fmt.Errorf("engine %q has no model %q", engine, model)
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &EditResult{MonitorPort: next.MonitorPort, RouterPort: next.RouterPort}, nil
 }
 
 // DeleteModel removes a single model from an engine.

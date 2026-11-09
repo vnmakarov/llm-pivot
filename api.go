@@ -65,8 +65,10 @@ func NewAPI(mgr *Manager, rebind func(string, int, int)) http.Handler {
 	mux.HandleFunc("PUT /api/settings", a.settings)
 	mux.HandleFunc("POST /api/engines", a.saveEngine)
 	mux.HandleFunc("DELETE /api/engines/{engine}", a.deleteEngine)
+	mux.HandleFunc("POST /api/engines/{engine}/move", a.moveEngine)
 	mux.HandleFunc("POST /api/models", a.saveModel)
 	mux.HandleFunc("DELETE /api/engines/{engine}/models/{model}", a.deleteModel)
+	mux.HandleFunc("POST /api/engines/{engine}/models/{model}/move", a.moveModel)
 	mux.HandleFunc("POST /api/control", a.control)
 	mux.HandleFunc("POST /api/log/clear", a.clearLog)
 	return mux
@@ -263,6 +265,32 @@ func (a *API) saveModel(w http.ResponseWriter, r *http.Request) {
 
 func (a *API) deleteModel(w http.ResponseWriter, r *http.Request) {
 	res, err := a.mgr.DeleteModel(r.PathValue("engine"), r.PathValue("model"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
+}
+
+func (a *API) moveEngine(w http.ResponseWriter, r *http.Request) {
+	var in MoveInput
+	if !decode(w, r, &in) {
+		return
+	}
+	res, err := a.mgr.MoveEngine(r.PathValue("engine"), in.Direction)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
+}
+
+func (a *API) moveModel(w http.ResponseWriter, r *http.Request) {
+	var in MoveInput
+	if !decode(w, r, &in) {
+		return
+	}
+	res, err := a.mgr.MoveModel(r.PathValue("engine"), r.PathValue("model"), in.Direction)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return

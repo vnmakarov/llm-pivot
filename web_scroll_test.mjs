@@ -43,7 +43,7 @@ const stub = (extra = {}) => ({
 });
 const byId = {
   logview: log, follow, content: stub({ clientHeight: 800 }),
-  'monitor-resizer': stub({ offsetHeight: 6 }), detail: stub(),
+  'monitor-resizer': stub({ offsetHeight: 6 }), detail: stub(), tree: stub(),
 };
 const document = {
   getElementById: (id) => byId[id] || stub(),
@@ -120,6 +120,39 @@ byId.detail = stub();
 run(`S.cfg = { monitor_port: 8061, router_port: 8078, host: '127.0.0.1' }; renderSettings()`);
 check('Settings explains automatic API selection', byId.detail.innerHTML.includes('detects OpenAI and Anthropic requests automatically'), true);
 check('Settings has no manual API selector', byId.detail.innerHTML.includes('id="f-interface"'), false);
+
+// Every engine and model row can be reordered, and the ends say so.
+run(`S.cfg = { engines: [
+       { name: 'alpha', port: 8080, models: [{ name: 'a1' }, { name: 'a2' }] },
+       { name: 'beta',  port: 8090, models: [{ name: 'b1' }] }] };
+     S.status = {}; S.sel = { kind: 'settings' }; S.treeSig = ''; renderTree()`);
+const tree = byId.tree.innerHTML;
+const rows = (re) => (tree.match(re) || []).length;
+check('every engine and model row has both arrows', rows(/class="move"/g), 10);
+check('the first engine cannot move up',
+  /data-move="up" data-engine="alpha" disabled/.test(tree), true);
+check('the last engine cannot move down',
+  /data-move="down" data-engine="beta" disabled/.test(tree), true);
+check('a middle model can move either way',
+  /data-move="up" data-engine="alpha" data-model="a2"(?! disabled)/.test(tree), true);
+check('an only child cannot move at all', rows(/data-model="b1" disabled/g), 2);
+// Ten arrows is two engines plus three models, so the Add model rows got none.
+check('the restructured add-model row is still selectable',
+  /class="side-main" data-kind="new-model"/.test(tree), true);
+
+// An arrow asks the server to move that one row, naming it in the path.
+const sent = [];
+ctx.fetch = (path, opt) => {
+  sent.push({ path, opt });
+  return Promise.resolve({ ok: true, json: () => Promise.resolve({}) });
+};
+const moves = () => sent.filter((s) => s.path.endsWith('/move'));
+await run(`moveItem({ move: 'down', engine: 'eng a', model: 'm/1' })`);
+await run(`moveItem({ move: 'up', engine: 'solo' })`);
+check('a model moves under its own engine', moves()[0].path,
+  '/api/engines/eng%20a/models/m%2F1/move');
+check('the direction travels in the body', moves()[0].opt.body, '{"direction":"down"}');
+check('an engine moves on its own path', moves()[1].path, '/api/engines/solo/move');
 
 if (fails) {
   console.error(`${fails} check(s) failed`);

@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
@@ -808,6 +809,142 @@ func TestDeleteEngineRemovesItsModels(t *testing.T) {
 	}
 	if e, _ := cfg.FindModel("alpha"); e != nil {
 		t.Error("the model outlived its engine")
+	}
+}
+
+// ------------------------------------------------------- reordering
+
+// orderingManager adds a second model to the first engine, so that both the
+// engine list and a model list have an inside and two ends.
+func orderingManager(t *testing.T) *Manager {
+	t.Helper()
+	mgr := twoEngineManager(t)
+	if _, err := mgr.SaveModel(ModelInput{Engine: "eng-alpha", Name: "alpha2"}); err != nil {
+		t.Fatal(err)
+	}
+	return mgr
+}
+
+func engineOrder(c *Config) []string {
+	names := []string{}
+	for _, e := range c.Engines {
+		names = append(names, e.Name)
+	}
+	return names
+}
+
+func modelOrder(c *Config, engine string) []string {
+	names := []string{}
+	for _, m := range c.Engine(engine).Models {
+		names = append(names, m.Name)
+	}
+	return names
+}
+
+func TestMoveReordersAndPersists(t *testing.T) {
+	mgr := orderingManager(t)
+	if _, err := mgr.MoveEngine("eng-beta", "up"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := mgr.MoveModel("eng-alpha", "alpha", "down"); err != nil {
+		t.Fatal(err)
+	}
+	// The order must survive the write, not just the in-memory swap.
+	reloaded, err := LoadConfig(mgr.Config().Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []*Config{mgr.Config(), reloaded} {
+		if got := engineOrder(c); !reflect.DeepEqual(got, []string{"eng-beta", "eng-alpha"}) {
+			t.Errorf("engines: %v", got)
+		}
+		if got := modelOrder(c, "eng-alpha"); !reflect.DeepEqual(got, []string{"alpha2", "alpha"}) {
+			t.Errorf("models: %v", got)
+		}
+	}
+}
+
+func TestMoveRejectsTheEndsAndUnknownNames(t *testing.T) {
+	mgr := orderingManager(t)
+	for _, tc := range []struct {
+		what, detail string
+		move         func() (*EditResult, error)
+	}{
+		{"engine first", "already first", func() (*EditResult, error) { return mgr.MoveEngine("eng-alpha", "up") }},
+		{"engine last", "already last", func() (*EditResult, error) { return mgr.MoveEngine("eng-beta", "down") }},
+		{"bad direction", "unknown direction", func() (*EditResult, error) { return mgr.MoveEngine("eng-alpha", "sideways") }},
+		{"unknown engine", "unknown engine", func() (*EditResult, error) { return mgr.MoveEngine("nothing", "up") }},
+		{"model first", "already first", func() (*EditResult, error) { return mgr.MoveModel("eng-alpha", "alpha", "up") }},
+		{"model last", "already last", func() (*EditResult, error) { return mgr.MoveModel("eng-alpha", "alpha2", "down") }},
+		{"only model", "already first", func() (*EditResult, error) { return mgr.MoveModel("eng-beta", "beta", "up") }},
+		{"unknown model", "has no model", func() (*EditResult, error) { return mgr.MoveModel("eng-alpha", "nothing", "up") }},
+	} {
+		if _, err := tc.move(); err == nil || !strings.Contains(err.Error(), tc.detail) {
+			t.Errorf("%s: %v", tc.what, err)
+		}
+	}
+	// A rejected move must leave the configuration exactly as it was.
+	cfg := mgr.Config()
+	if got := engineOrder(cfg); !reflect.DeepEqual(got, []string{"eng-alpha", "eng-beta"}) {
+		t.Errorf("engines disturbed: %v", got)
+	}
+	if got := modelOrder(cfg, "eng-alpha"); !reflect.DeepEqual(got, []string{"alpha", "alpha2"}) {
+		t.Errorf("models disturbed: %v", got)
+	}
+}
+
+// Reordering is presentational, so unlike every other edit it must not
+// interrupt whatever is running.
+func TestMoveLeavesTheRunningEngineAlone(t *testing.T) {
+	mgr := orderingManager(t)
+	if err := mgr.Start("alpha"); err != nil {
+		t.Fatal(err)
+	}
+	pid := mgr.Status().PID
+	res, err := mgr.MoveModel("eng-alpha", "alpha", "down")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Notes) != 0 {
+		t.Errorf("notes: %v", res.Notes)
+	}
+	if _, err := mgr.MoveEngine("eng-alpha", "down"); err != nil {
+		t.Fatal(err)
+	}
+	if st := mgr.Status(); st.Model != "alpha" || st.PID != pid {
+		t.Fatalf("the move restarted or stopped the engine: %+v", st)
+	}
+}
+
+func TestMoveOverHTTP(t *testing.T) {
+	mgr := orderingManager(t)
+	srv := httptest.NewServer(NewAPI(mgr, func(string, int, int) {}))
+	defer srv.Close()
+
+	post := func(path, body string) int {
+		t.Helper()
+		resp, err := http.Post(srv.URL+path, "application/json", strings.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		return resp.StatusCode
+	}
+	if code := post("/api/engines/eng-beta/move", `{"direction":"up"}`); code != 200 {
+		t.Errorf("move engine: %d", code)
+	}
+	if code := post("/api/engines/eng-alpha/models/alpha2/move", `{"direction":"up"}`); code != 200 {
+		t.Errorf("move model: %d", code)
+	}
+	if code := post("/api/engines/eng-alpha/models/alpha2/move", `{"direction":"up"}`); code != 400 {
+		t.Errorf("move past the end: %d", code)
+	}
+	cfg := mgr.Config()
+	if got := engineOrder(cfg); !reflect.DeepEqual(got, []string{"eng-beta", "eng-alpha"}) {
+		t.Errorf("engines: %v", got)
+	}
+	if got := modelOrder(cfg, "eng-alpha"); !reflect.DeepEqual(got, []string{"alpha2", "alpha"}) {
+		t.Errorf("models: %v", got)
 	}
 }
 
