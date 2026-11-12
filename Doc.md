@@ -20,7 +20,7 @@ See [README.md](README.md) for an overview and screenshot.
 
 ## Why
 
-Different models may need different engines, such as llama.cpp, strata or
+Different models may need different engines, such as llama.cpp, strata, maya, splash, or
 ninfer. When GPU memory only fits one model, switching requires stopping one
 engine and starting another with its model-specific options.
 

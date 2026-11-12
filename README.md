@@ -1,6 +1,6 @@
 # llm-pivot
 
-llm-pivot runs local LLM engines such as llama.cpp, strata and ninfer. It
+llm-pivot runs local LLM engines such as llama.cpp, strata, splash, maya, and ninfer. It
 routes OpenAI- or Anthropic-compatible requests to the engine configured for
 each model and provides a web page for engine settings, controls and output.
 
