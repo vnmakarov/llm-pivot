@@ -818,3 +818,27 @@ func TestAnthropicSystemPrefixCompatibility(t *testing.T) {
 		})
 	}
 }
+
+func TestAnthropicHostHeaderPointsAtEngine(t *testing.T) {
+	mgr := NewManager(&Config{})
+	router := NewRouter(mgr)
+	var gotHost string
+	router.proxy.Transport = anthropicRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+		gotHost = req.Host
+		req.Body.Close()
+		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(`{}`))}, nil
+	})
+	r := httptest.NewRequest("POST", "/v1/messages", strings.NewReader(`{"model":"alpha","max_tokens":10,"messages":[{"role":"user","content":"hello"}]}`))
+	r.Host = "192.168.0.110:8078"
+	in, err := prepareAnthropic(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := httptest.NewRecorder()
+	router.anthropicMessages(w, r, routeTarget{engine: "fake", model: "alpha", port: 8081}, in)
+	want := fmt.Sprintf("%s:%d", engineHost, 8081)
+	if gotHost != want {
+		t.Errorf("got req.Host = %q, want %q", gotHost, want)
+	}
+}
+

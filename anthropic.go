@@ -566,6 +566,7 @@ func (rt *Router) anthropicMessages(w http.ResponseWriter, r *http.Request, targ
 	req := r.Clone(r.Context())
 	req.URL.Scheme = "http"
 	req.URL.Host = fmt.Sprintf("%s:%d", engineHost, target.port)
+	req.Host = req.URL.Host
 	req.URL.Path = "/v1/chat/completions"
 	req.URL.RawPath = ""
 	req.URL.RawQuery = ""

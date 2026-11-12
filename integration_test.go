@@ -95,6 +95,8 @@ func TestHelperEngine(t *testing.T) {
 		}
 		body, _ := io.ReadAll(r.Body)
 		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("X-Received-Host", r.Host)
+		w.Header().Set("X-Received-Forwarded-Host", r.Header.Get("X-Forwarded-Host"))
 		fmt.Fprintf(w, `{"served_by":%q,"echo":%s}`, tag, string(body))
 	})
 	// llama.cpp's native prompt renderer and tokenizer, which count_tokens
@@ -614,6 +616,36 @@ func TestRouterForwardsUnrelatedPathsToRunningEngine(t *testing.T) {
 	body, _ := io.ReadAll(resp.Body)
 	if !bytes.Contains(body, []byte(`"status":"ok"`)) {
 		t.Fatalf("GET /health returned %q", body)
+	}
+}
+
+func TestRouterHostHeaderPointsAtEngine(t *testing.T) {
+	mgr := testManager(t, []*Model{{Name: "alpha"}}, nil)
+	if err := mgr.Start("alpha"); err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(NewRouter(mgr))
+	defer srv.Close()
+
+	req, err := http.NewRequest(http.MethodPost, srv.URL+"/v1/chat/completions", strings.NewReader(`{"model":"alpha","messages":[]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Host = "192.168.0.110:8078"
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	wantHost := fmt.Sprintf("%s:%d", engineHost, mgr.Config().Engines[0].Port)
+	if got := resp.Header.Get("X-Received-Host"); got != wantHost {
+		t.Errorf("engine received Host %q, want %q", got, wantHost)
+	}
+	if got := resp.Header.Get("X-Received-Forwarded-Host"); got != "192.168.0.110:8078" {
+		t.Errorf("engine received X-Forwarded-Host %q, want 192.168.0.110:8078", got)
 	}
 }
 

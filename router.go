@@ -69,7 +69,6 @@ func NewRouter(mgr *Manager) *Router {
 				Scheme: "http",
 				Host:   net.JoinHostPort(engineHost, strconv.Itoa(t.port)),
 			})
-			pr.Out.Host = pr.In.Host
 			pr.SetXForwarded()
 		},
 		ModifyResponse: func(resp *http.Response) error {
