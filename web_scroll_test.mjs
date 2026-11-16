@@ -154,6 +154,42 @@ check('a model moves under its own engine', moves()[0].path,
 check('the direction travels in the body', moves()[0].opt.body, '{"direction":"down"}');
 check('an engine moves on its own path', moves()[1].path, '/api/engines/solo/move');
 
+// A save the server rejects must leave the form exactly as it was typed.
+// Redrawing the card to show the error is what empties the fields of a new
+// engine or model; the configuration file is the only thing that should be
+// left unchanged.
+let renders = 0, detailHTML = '';
+const detail = stub();
+Object.defineProperty(detail, 'innerHTML', {
+  get() { return detailHTML; },
+  set(v) { detailHTML = v; renders++; },
+});
+byId.detail = detail;
+byId['e-save'] = stub();
+byId['e-monitor'] = stub();
+byId['m-name'] = stub();
+byId['m-options'] = stub();
+const reject = () => Promise.resolve({ ok: false, status: 400, statusText: 'Bad Request',
+  json: () => Promise.resolve({ error: 'engine "x" has an empty command' }) });
+
+ctx.fetch = reject;
+run(`S.cfg = { engines: [] }; S.status = {}; S.sel = { kind: 'new-engine' };
+     S.banner = null; renderEngineForm(null, true)`);
+renders = 0;
+await byId['e-save'].onclick();
+check('a rejected new engine is not redrawn', renders, 0);
+check('a rejected new engine says why', run('S.banner && S.banner.text'),
+  'engine "x" has an empty command');
+
+run(`S.cfg = { engines: [{ name: 'eng', port: 8080, models: [] }] };
+     S.sel = { kind: 'new-model', engine: 'eng' };
+     S.banner = null; renderModelForm('eng', null)`);
+renders = 0;
+await run('saveModel(true)');
+check('a rejected new model is not redrawn', renders, 0);
+check('a rejected new model says why', run('S.banner && S.banner.text'),
+  'engine "x" has an empty command');
+
 if (fails) {
   console.error(`${fails} check(s) failed`);
   process.exit(1);

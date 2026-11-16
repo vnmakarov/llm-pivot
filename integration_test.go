@@ -814,6 +814,24 @@ func TestEditRejectsDuplicateModelName(t *testing.T) {
 	}
 }
 
+// A form the server rejects leaves the configuration file alone. The test
+// manager's file does not exist yet, so anything the rejected save wrote -
+// an engine with its blank fields, say - would show up as a new file.
+func TestRejectedNewEngineIsNotSaved(t *testing.T) {
+	mgr := testManager(t, nil, nil)
+	// No command: Validate rejects it, the way the page's empty field would.
+	_, err := mgr.SaveEngine(EngineInput{Name: "broken", Port: freePort(t)})
+	if err == nil {
+		t.Fatal("an engine without a command must be rejected")
+	}
+	if _, statErr := os.Stat(mgr.Config().Path()); !os.IsNotExist(statErr) {
+		t.Fatalf("the rejected engine reached the file: %v", statErr)
+	}
+	if n := len(mgr.Config().Engines); n != 1 {
+		t.Fatalf("engine count = %d, want the original one only", n)
+	}
+}
+
 func TestEditPersistsToDisk(t *testing.T) {
 	mgr := testManager(t, nil, nil)
 	if _, err := mgr.SaveModel(ModelInput{

@@ -311,7 +311,28 @@ function findModel(engine, model) {
 
 function bannerHTML() {
   if (!S.banner) return '';
-  return `<div class="banner ${S.banner.kind}">${esc(S.banner.text)}</div>`;
+  return `<div class="banner form-banner ${S.banner.kind}">${esc(S.banner.text)}</div>`;
+}
+
+/* A rejected save must leave the form exactly as it was typed: the only
+   thing that changes is that the configuration file is not written. Redrawing
+   the form to show the error would throw away every field, which for a new
+   engine or model means going back to empty ones - so the banner is put into
+   the card already on screen instead of rendering it again. */
+function showFormError(msg) {
+  S.banner = { kind: 'error', text: msg };
+  const card = $('detail').querySelector && $('detail').querySelector('.card');
+  if (!card) return;
+  let box = card.querySelector('.form-banner');
+  if (!box) {
+    box = document.createElement('div');
+    const sub = card.querySelector('.card-sub');
+    if (sub) sub.after(box);
+    else card.querySelector('.card-head').after(box);
+  }
+  box.className = 'banner form-banner error';
+  box.textContent = msg;
+  fitMonitor();
 }
 
 /* --------------------------------------------------------------- settings */
@@ -400,8 +421,7 @@ function renderSettings() {
       trimLog();
       renderDetail(true);
     } catch (e) {
-      S.banner = { kind: 'error', text: e.message };
-      renderDetail(true);
+      showFormError(e.message);
     }
   };
 }
@@ -553,8 +573,7 @@ function renderEngineForm(e, isNew) {
       await poll();
       select({ kind: 'engine', engine: body.name });
     } catch (err) {
-      S.banner = { kind: 'error', text: err.message };
-      renderDetail(true);
+      showFormError(err.message);
     }
   };
 
@@ -571,8 +590,7 @@ function renderEngineForm(e, isNew) {
         await poll();
         select({ kind: 'settings' });
       } catch (err) {
-        S.banner = { kind: 'error', text: err.message };
-        renderDetail(true);
+        showFormError(err.message);
       }
     };
   }
@@ -732,8 +750,7 @@ async function saveModel(isNew) {
     await poll();
     select({ kind: 'model', engine: s.engine, model: body.name });
   } catch (e) {
-    S.banner = { kind: 'error', text: e.message };
-    renderDetail(true);
+    showFormError(e.message);
   }
 }
 
