@@ -32,7 +32,6 @@ function makeLogView() {
 }
 
 const log = makeLogView();
-const follow = { checked: true };
 const stub = (extra = {}) => ({
   style: { setProperty() {}, height: '' }, classList: { toggle() {}, add() {}, remove() {} },
   dataset: {}, hidden: false, clientHeight: 800, offsetHeight: 0, scrollHeight: 0,
@@ -42,7 +41,7 @@ const stub = (extra = {}) => ({
   parentElement: { hidden: false }, ...extra,
 });
 const byId = {
-  logview: log, follow, content: stub({ clientHeight: 800 }),
+  logview: log, content: stub({ clientHeight: 800 }),
   'monitor-resizer': stub({ offsetHeight: 6 }), detail: stub(), tree: stub(),
 };
 const document = {
@@ -103,17 +102,11 @@ log.scrollTop = bottom() - 30;
 run(`appendLines(${lines(1, 102)})`);
 check('within the slack it still follows', log.scrollTop, bottom());
 
-// Unticking Follow pins nothing, even sitting at the end.
-follow.checked = false;
-log.scrollTop = bottom();
-const was = log.scrollTop;
-run(`appendLines(${lines(5, 103)})`);
-check('Follow off does not follow', log.scrollTop, was);
-
-// Ticking it means "take me back to the end and keep me there".
-log.scrollTop = 100; follow.checked = true;
-run('$("follow").onchange()');
-check('ticking Follow returns to the end', log.scrollTop, bottom());
+// Following is decided purely by where the view sits: scrolling up stops it,
+// and sliding the window back down to the end resumes it. The Follow box that
+// used to gate this is gone.
+const page = fs.readFileSync(path.join(here, 'web', 'index.html'), 'utf8');
+check('the log has no Follow box', page.includes('id="follow"'), false);
 
 // Settings explains automatic API selection without asking for a mode.
 byId.detail = stub();

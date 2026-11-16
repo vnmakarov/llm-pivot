@@ -181,9 +181,10 @@ The right pane contains the selected settings form and an **Engine monitor**
 for the active engine.
 
 On wide screens, the form and monitor scroll independently within a fixed page
-layout. The monitor output follows the newest line while **Follow** is ticked.
-Untick it to read earlier output without automatic scrolling. At widths of 880
-pixels or less, the page uses normal document scrolling.
+layout. The monitor keeps the newest line in view while you are at the end of
+the output. Scroll up to read earlier output and the view stays where you put
+it; slide the window back down to the end and it follows new lines again. At
+widths of 880 pixels or less, the page uses normal document scrolling.
 
 The monitor fills the space below the form. Drag the grey handle to adjust its
 height. The height resets when you select another page.

@@ -779,7 +779,7 @@ const LOG_BOTTOM_SLACK = 40;
 
 function logFollowing() {
   const pre = $('logview');
-  if (!pre || !$('follow').checked) return false;
+  if (!pre) return false;
   return pre.scrollTop + pre.clientHeight >= pre.scrollHeight - LOG_BOTTOM_SLACK;
 }
 
@@ -840,7 +840,6 @@ function renderMonitor() {
   $('btn-reload-embed').hidden = !framed;
   $('btn-open-embed').hidden = !framed;
   $('btn-clear-log').hidden = showEngine && mode === 'embed';
-  $('follow').parentElement.hidden = showEngine;
 
   for (const t of document.querySelectorAll('#monitor-tabs .tab')) {
     // The first tab is the engine's own view whatever its flavour.
@@ -1009,12 +1008,6 @@ function init() {
   });
   $('item-settings').onclick = () => select({ kind: 'settings' });
   $('btn-add-engine').onclick = () => select({ kind: 'new-engine' });
-  // Ticking Follow means "take me to the end and keep me there". That used
-  // to happen by itself, because the pane was re-pinned on every refresh
-  // whatever the view was showing; now that it is not, the box has to say so.
-  $('follow').onchange = () => {
-    if ($('follow').checked) logToBottom();
-  };
   $('btn-clear-log').onclick = async () => {
     try {
       await api('POST', '/api/log/clear');

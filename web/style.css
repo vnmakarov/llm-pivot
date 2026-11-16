@@ -278,8 +278,6 @@ input:focus, textarea:focus, select:focus {
 }
 input[readonly] { background: var(--panel-2); color: var(--ink-2); }
 
-.check { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--ink-2); }
-
 /* ---------------------------------------------------------------- buttons */
 
 .btn {
