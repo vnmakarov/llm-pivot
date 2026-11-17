@@ -14,7 +14,7 @@ Two ports:
 Only one engine, serving one model, runs at a time. Requesting a different model stops
 the current engine before starting the next one.
 
-Most of llm-pivot was written by Claude Opus 5.
+Most of llm-pivot was written by Claude Opus 5 and DeepSeek-V4.1-Flash.
 
 <a href="Monitor-Page.png">
   <img src="Monitor-Page.png" alt="llm-pivot monitor page">
